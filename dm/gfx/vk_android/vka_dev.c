@@ -1192,9 +1192,9 @@ void vka_floor_stats(char *b, size_t n) {   // the replay statistics: frames at 
 // Qualcomm's hint maps onto the same kernel call: IOCTL_KGSL_SETPROPERTY KGSL_PROP_PWR_CONSTRAINT {KGSL_CONSTRAINT_PWRLEVEL, context, level} (graphics-kernel adreno.c
 // adreno_set_constraint), level 1 = the highest clock or 2-100 = a floor at that % of it, the hint's two kinds. On GPUs whose clock the GMU decides (gen8, the Adreno 840:
 // not host_based_dcvs) the kernel hands it to the GMU at once as the context's rule (adreno_gen8_hwsched.c gen8_hwsched_set_pwrconstraint, H2F_MSG_CONTEXT_RULE), which holds
-// the clock while that context's work runs; on host-DCVS GPUs (older) it applies at dispatch of submissions flagged KGSL_CONTEXT_PWR_CONSTRAINT and there only "highest" (1)
-// is taken. The rule only reaches the GMU while the context is registered with it (after its first submission; again after the GPU slept), and Turnip does not create its
-// context with that flag, so the level is sent again every 30 frames. Which contexts: the kernel lets a file descriptor set the constraint only on contexts it owns
+// the clock while that context's work runs; on host-DCVS GPUs (e.g. Adreno 830 on Android 15) it applies at dispatch only when the context (or cmdbatch) carries
+// KGSL_CONTEXT_PWR_CONSTRAINT (0x800; added for custom drivers by android/host/adreno_kgsl_compat.c on IOCTL_KGSL_DRAWCTXT_CREATE), and there only "highest" (1) is taken.
+// The rule only reaches the GMU while the context is registered with it (after its first submission; again after the GPU slept), so the level is sent again every 30 frames. Which contexts: the kernel lets a file descriptor set the constraint only on contexts it owns
 // (kgsl_context_get_owner), so the contexts the driver made for the device's queue are the ids this process's /dev/kgsl-3d0 descriptors own after vkCreateDevice and did
 // not own before (Turnip: one per VkQueue, tu_knl_kgsl.cc kgsl_submitqueue_new). The ownership test is the same ioctl with KGSL_CONSTRAINT_NONE, which changes nothing on a
 // context without a constraint. Before 2026-11-05 Turnip's floor was the ADPF session (vka_perf.c), which did not raise the GPU clock: 282-646 MHz (mean 380) in DKB's
