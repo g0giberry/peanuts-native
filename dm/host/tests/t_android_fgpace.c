@@ -1,7 +1,7 @@
-// Frame-generation pacing loop (dm/gfx/vk_android/vka_fg_pace.h + lsfg/lsfg_pacer.c): closed-loop simulation of
-// FIFO swapchain + VK_GOOGLE_display_timing desiredPresentTime backpressure. Verifies recovery from temporary
-// slowdowns across x2/x3/x4, target-FPS mode, and 60/90/120 Hz panels without breaking genuinely GPU-bound,
-// decoupled, or host-capped games.
+// PEANUTS(upstream-candidate): frame-generation pacing loop (dm/gfx/vk_android/vka_fg_pace.h + lsfg/lsfg_pacer.c):
+// closed-loop simulation of FIFO swapchain + VK_GOOGLE_display_timing desiredPresentTime backpressure. Verifies
+// recovery from temporary slowdowns across x2/x3/x4, target-FPS mode, and 60/90/120 Hz panels without breaking
+// genuinely GPU-bound, decoupled, or host-capped games.
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -226,6 +226,100 @@ int main(void) {
         }
         CHECK(gen_ok == 60 && fabs(s.pacer.smoothed_interval - P60) < 0.0002,
               "target 120 on 121.4Hz: gen=%d/60 sm=%.5f", gen_ok, s.pacer.smoothed_interval);
+    }
+
+    // 13. Display-interval mode with no cap: must have zero on/off flips at 61.5 fps / 120 Hz x2 and 31 fps / 60 Hz x2
+    {
+        sim_t s120; sim_init(&s120, 3, 1);
+        sim_run(&s120, 90, 2, 0, R120, R120, 1.0 / 61.5);
+        int flips120 = 0; size_t prev = s120.last.ng;
+        for (int i = 0; i < 300; i++) {
+            sim_step(&s120, 2, 0, R120, R120, 1.0 / 61.5);
+            if (s120.last.ng != prev) { flips120++; prev = s120.last.ng; }
+        }
+        CHECK(flips120 == 0 && s120.last.ng == 1, "display 61.5fps 120Hz x2: flips=%d ng=%zu", flips120, s120.last.ng);
+
+        sim_t s60; sim_init(&s60, 3, 1);
+        sim_run(&s60, 90, 2, 0, R60, R60, 1.0 / 31.0);
+        int flips60 = 0; prev = s60.last.ng;
+        for (int i = 0; i < 300; i++) {
+            sim_step(&s60, 2, 0, R60, R60, 1.0 / 31.0);
+            if (s60.last.ng != prev) { flips60++; prev = s60.last.ng; }
+        }
+        CHECK(flips60 == 0 && s60.last.ng == 1, "display 31fps 60Hz x2: flips=%d ng=%zu", flips60, s60.last.ng);
+
+        // Display-interval mode 60 -> 30 -> 60 fps slowdown recovery
+        sim_t srec; sim_init(&srec, 3, 1);
+        sim_run(&srec, 90, 2, 0, R120, R120, P60);
+        sim_run(&srec, 45, 2, 0, R120, R120, P30);
+        sim_run(&srec, 90, 2, 0, R120, R120, P60);
+        CHECK(srec.last.ng == 1 && fabs(srec.last.hold - R120) < 0.0005 && fabs(srec.last_dt - P60) < 0.001,
+              "display 60->30->60 recovery: ng=%zu hold=%.4f dt=%.4f", srec.last.ng, srec.last.hold, srec.last_dt);
+    }
+
+    // 14. Live FPS cap change (30 -> 60 fps with x2 on 120 Hz)
+    {
+        sim_t s; sim_init(&s, 3, 0);
+        sim_run(&s, 90, 2, 0, P30, R120, P30);
+        CHECK(s.last.ng == 1 && fabs(s.last.hold - P60) < 0.0005, "live cap 30fps: ng=%zu hold=%.4f", s.last.ng, s.last.hold);
+        sim_run(&s, 90, 2, 0, P60, R120, P60);
+        CHECK(s.last.ng == 1 && fabs(s.last.hold - R120) < 0.0005 && fabs(s.last_dt - P60) < 0.001,
+              "live cap 30->60fps: ng=%zu hold=%.4f dt=%.4f", s.last.ng, s.last.hold, s.last_dt);
+    }
+
+    // 15. Frame-time jitter (+-1.5 ms) on 60 fps / 120 Hz x2 and slowdown recovery
+    {
+        sim_t s; sim_init(&s, 3, 0);
+        for (int i = 0; i < 60; i++) sim_step(&s, 2, 0, P60, R120, P60 + ((i % 3) - 1) * 0.0015);
+        CHECK(s.last.ng == 1, "jitter warmup: ng=%zu", s.last.ng);
+        for (int i = 0; i < 45; i++) sim_step(&s, 2, 0, P60, R120, P30 + ((i % 3) - 1) * 0.0015);
+        for (int i = 0; i < 90; i++) sim_step(&s, 2, 0, P60, R120, P60 + ((i % 3) - 1) * 0.0015);
+        CHECK(s.last.ng == 1 && fabs(s.last.hold - R120) < 0.0005 && fabs(s.last_dt - P60) < 0.002,
+              "jitter recovery: ng=%zu hold=%.4f dt=%.4f", s.last.ng, s.last.hold, s.last_dt);
+    }
+
+    // 16. Off-nominal panels (119.88 Hz and 59.94 Hz): hold snaps to exact whole refresh without ~10 s drift
+    {
+        const double R11988 = 1001.0 / 120000.0, R5994 = 1001.0 / 60000.0;
+        sim_t s1; sim_init(&s1, 3, 0);
+        sim_run(&s1, 90, 2, 0, P30, R11988, P30);
+        CHECK(s1.last.ng == 1 && fabs(s1.last.hold - 2.0 * R11988) < 1e-6,
+              "119.88Hz 30fps x2 snap: ng=%zu hold=%.6f want=%.6f", s1.last.ng, s1.last.hold, 2.0 * R11988);
+
+        sim_t s2; sim_init(&s2, 3, 0);
+        sim_run(&s2, 90, 2, 0, P60, R11988, P60);
+        CHECK(s2.last.ng == 1 && fabs(s2.last.hold - R11988) < 1e-6,
+              "119.88Hz 60fps x2 snap: ng=%zu hold=%.6f want=%.6f", s2.last.ng, s2.last.hold, R11988);
+
+        sim_t s3; sim_init(&s3, 3, 0);
+        sim_run(&s3, 90, 2, 0, 1.0 / 15.0, R5994, 1.0 / 15.0);
+        CHECK(s3.last.ng == 1 && fabs(s3.last.hold - 2.0 * R5994) < 1e-6,
+              "59.94Hz 15fps x2 snap: ng=%zu hold=%.6f want=%.6f", s3.last.ng, s3.last.hold, 2.0 * R5994);
+    }
+
+    // 17. prev_ng == 0 guard: throttling detector must not fire when frame generation was not generating
+    {
+        lsfg_pacer p = {0}; uint64_t cnt = 0; uint32_t ws = 0;
+        uint64_t r120_ns = (uint64_t)(R120 * 1e9 + 0.5);
+        double t = 1.0;
+        for (int i = 0; i < 10; i++, t += P30) vka_fg_pace_step(&p, &cnt, &ws, 3, 2, 0, P60, r120_ns, t, 0, 0.0, P30);
+        vka_fg_pace_out o = vka_fg_pace_step(&p, &cnt, &ws, 3, 2, 0, P60, r120_ns, t + P30, 0, 0.016, 0.0);
+        CHECK(!o.throttled, "prev_ng==0 must not mark throttled: throttled=%d", o.throttled);
+    }
+
+    // 18. Drained-queue burst filter in target-FPS mode: 4 back-to-back presents (0.2 ms apart) must not skew smoothed_interval
+    {
+        lsfg_pacer p = {0}; uint64_t cnt = 0; uint32_t ws = 0;
+        uint64_t r120_ns = (uint64_t)(R120 * 1e9 + 0.5);
+        double t = 1.0;
+        for (int i = 0; i < 120; i++, t += P30) vka_fg_pace_step(&p, &cnt, &ws, 3, 2, 120, P30, r120_ns, t, 1, 0.0, P30);
+        float before = p.smoothed_interval;
+        for (int i = 0; i < 4; i++) {
+            t += 0.0002;
+            vka_fg_pace_step(&p, &cnt, &ws, 3, 2, 120, P30, r120_ns, t, 1, 0.0, 0.0);
+        }
+        CHECK(fabsf(p.smoothed_interval - before) < 0.0001f,
+              "drained-queue burst skewed smoothed_interval: before=%.5f after=%.5f", before, p.smoothed_interval);
     }
 
     if (fails) { printf("t_android_fgpace: %d failed\n", fails); return 1; }

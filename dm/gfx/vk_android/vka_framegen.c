@@ -16,7 +16,7 @@
 #include <math.h>
 #ifdef NX_LSFG
 #include "lsfg/lsfg.h"
-#include "vka_fg_pace.h"
+#include "vka_fg_pace.h"   // PEANUTS(upstream-candidate): closed-loop pacing math
 #endif
 
 static _Atomic int g_on = -1, g_mult = 2, g_target, g_flow = 75, g_state;   // g_state: 0 off, 1 generating, 2 on and not generating, -1 unavailable
@@ -55,7 +55,7 @@ int nxhost_framegen_status(char *buf, int n) {
 
 #ifndef NX_LSFG
 int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence, int format,
-                 double acq_s, double game_wait_s, vka_img **gen, double *hold, double *out_period) {
+                 double acq_s, double game_wait_s, vka_img **gen, double *hold, double *out_period) {   // PEANUTS(upstream-candidate)   // PEANUTS(upstream-candidate)
     (void)serial; (void)crop; (void)period; (void)fence; (void)format; (void)acq_s; (void)game_wait_s; (void)gen;
     settings_init(); *hold = 0; *out_period = 0;
     if (atomic_load(&g_on) > 0) { atomic_store(&g_state, -1); reason("%s", "not in this build (built without NX_LSFG)"); vka_fps_fg(-1, 1); }
@@ -69,7 +69,7 @@ static struct {
     lsfg_chain *chain; VkExtent2D ext; int flow;
     vka_img *out[LSFG_MAX_GENERATIONS]; VkImageView out_view[LSFG_MAX_GENERATIONS];
     VkCommandPool pool; struct { VkCommandBuffer cb; VkFence fence; vka_img *held; } fr[NFG]; unsigned fi;
-    lsfg_pacer pacer; uint64_t count; uint32_t warm_streak; size_t prev_ng;
+    lsfg_pacer pacer; uint64_t count; uint32_t warm_streak; size_t prev_ng;   // PEANUTS(upstream-candidate): prev_ng
     double out_period, longer_since;   // the output period the window's frame rate is set for, and since when a longer one is wanted
 } F;
 
@@ -116,7 +116,7 @@ static void teardown(void) {
         if (F.out[i]) vka_tex_drop(F.out[i]);   // the last reference: destroyed by vka_tex.c (with the views the present made of it)
         F.out[i] = NULL;
     }
-    lsfg_pacer_reset(&F.pacer); F.count = 0; F.warm_streak = 0; F.prev_ng = 0; F.out_period = 0; F.longer_since = 0;
+    lsfg_pacer_reset(&F.pacer); F.count = 0; F.warm_streak = 0; F.prev_ng = 0; F.out_period = 0; F.longer_since = 0;   // PEANUTS(upstream-candidate)
 }
 
 // An output as a vka_img, so the present shows it as it shows the window texture (blit or the rotated copy) and keeps it alive while it reads it
@@ -240,7 +240,7 @@ static void fg_dump(unsigned k, uint64_t count, size_t ng) {
 }
 
 int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence, int format,
-                 double acq_s, double game_wait_s, vka_img **gen, double *hold, double *out_period) {
+                 double acq_s, double game_wait_s, vka_img **gen, double *hold, double *out_period) {   // PEANUTS(upstream-candidate)
     settings_init();
     *hold = 0; *out_period = 0;
     int on = atomic_load(&g_on) > 0, mult = atomic_load(&g_mult), target = atomic_load(&g_target), flow = atomic_load(&g_flow);
@@ -292,9 +292,17 @@ int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence
     // DM_VK_FG_REFRESH_CAP=0: no cap (a driver whose display timing reports a refresh the panel does not run at)
     uint64_t rns = VKA_ENV("DM_VK_FG_REFRESH_CAP", 1) ? vka_refresh_ns() : 0;
     uint64_t count = F.count;
+    // PEANUTS(upstream-candidate): break FIFO/display_timing slowdown feedback loop in vka_fg_pace_step
     vka_fg_pace_out po = vka_fg_pace_step(&F.pacer, &F.count, &F.warm_streak, LSFG_MAX_GENERATIONS, mult, target, period, rns, mono_s(), F.prev_ng, acq_s, game_wait_s);
     int warm = po.warm, capped = po.capped;
     size_t ng = po.ng;
+    { static int was_thr, nthr;
+      if (po.throttled && (!was_thr || nthr < 4) && nthr < 16) {
+          nthr++;
+          VLOG("frame generation: display backpressure detected (acq %.1f ms, game wait %.1f ms, smoothed %.1f ms -> %.1f ms, period %.1f ms)",
+               acq_s * 1e3, game_wait_s * 1e3, F.pacer.smoothed_interval * 1e3, po.interval * 1e3, period * 1e3);
+      }
+      was_thr = po.throttled; }
 
     unsigned k = F.fi++ % NFG;
     if (!F.fr[k].cb) {
@@ -332,7 +340,7 @@ int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence
       if (d != last) { last = d; left = d > 0 ? d : 0; }
       if (left > 0 && ng) { left--; fg_dump(k, count, ng); } }
     for (size_t g = 0; g < ng; g++) gen[g] = F.out[g];
-    F.prev_ng = ng;
+    F.prev_ng = ng;   // PEANUTS(upstream-candidate)
     double interval = po.interval;
     if (ng) *hold = po.hold;
     int st2 = ng ? 1 : 2;
