@@ -646,6 +646,7 @@ static void chunk(void) {
     if (VKA_ENV("DM_VK_PARTLOG", 0)) { char zb[400]; vka_rp_zstats(zb, sizeof zb);
         VLOG("part %u of the submission of frame %llu ended at %.3f s: %llu draws%s", part, (unsigned long long)g_frame, now_ns() / 1e9, (unsigned long long)(g_stat_draws - g_chunk_d0), zb); }
     vka_gbar_settle(g_cb);   // a game barrier left pending (vka_gbar.c), in this part: it covers the parts after it
+    vka_ub_flush();          // PEANUTS: flush outside-pass deferred inline uniform updates before part submit
     vka_up_flush(); vka_up_throttle();   // the upload batch goes first: the part may use what it made (vka_dev.c "Upload batches")
     // With the encoder the part's end, its submit and the next part's reset and begin are made on its thread, in order with the calls before: the replay thread goes on
     if (vka_enc_call(part_submit, &pe, sizeof pe)) { vka_enc_call(part_begin, &pb, sizeof pb); vka_enc_switch(next); }
@@ -729,6 +730,7 @@ static uint64_t sub_commit(uint64_t reserved, int has_sig, uint64_t signal) {
     ops = carry_take(fence, signal, ops, &n);
     if (!g_cb) { if (signal) vka_fence_cpu(signal, ops, n, post_run); else free(ops); return fence; }
     vka_rp_end();
+    vka_ub_flush();   // PEANUTS: flush outside-pass deferred inline uniform updates before submission end
     if (VKA_ENV("DM_VK_PARTLOG", 0) && g_nx) { char zb[400]; vka_rp_zstats(zb, sizeof zb); VLOG("last part of the submission of frame %llu: %llu draws%s", (unsigned long long)g_frame, (unsigned long long)(g_stat_draws - g_chunk_d0), zb); }
     vka_disp_settle(g_cb);   // the submission's last dispatches before the steps below and the next submission's (vka_draw.c "Dispatch order")
     vka_rw_point(g_cb, 'e', 0, 0, 0); vka_rw_commit(fence);   // DM_VK_RANGE_WATCH: the bytes at the submission's end, logged once it is done
@@ -1682,9 +1684,21 @@ static int exec(const uint8_t *p, int depth) {   // 1: parked at a wait (g_pk ho
         int bar_kept = 0;   // a game barrier taken inside the open pass (vka_rp_game_barrier): no pass end, no full barrier
         switch (h.op) {   // GPU work other than a dispatch: after the barrier the dispatches before it left pending (vka_draw.c "Dispatch order"), and before a part ends at a draw
         case OP_DRAW: case OP_DRAW_IDX: case OP_DRAW_TEX: case OP_CLEAR_COLOR: case OP_CLEAR_DS: case OP_CLEAR_TEX: case OP_CLEAR_BUF: case OP_COPY_B2B: case OP_COPY_B2T:
-        case OP_COPY_T2B: case OP_COPY_T2T: case OP_UPDATE_UB: case OP_REPORT_COUNTER: vka_disp_settle(g_cb); break;
+        case OP_COPY_T2B: case OP_COPY_T2T: case OP_REPORT_COUNTER: vka_disp_settle(g_cb); break;   // PEANUTS: OP_UPDATE_UB settles only on fallback / flush
         default: break;
         }
+        // PEANUTS begin: flush outside-pass deferred inline uniform updates before the next GPU consumer
+        if (h.op != OP_UPDATE_UB) {
+            switch (h.op) {
+            case OP_DRAW: case OP_DRAW_IDX: case OP_DRAW_TEX: case OP_CLEAR_COLOR: case OP_CLEAR_DS: case OP_CLEAR_TEX: case OP_CLEAR_BUF:
+            case OP_COPY_B2B: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_DISPATCH: case OP_DLSS: case OP_BARRIER:
+            case OP_WAIT_EVENT: case OP_WAIT_SYNC: case OP_TF_STATE:
+                if (!vka_rp_is_open()) vka_ub_flush();
+                break;
+            default: break;
+            }
+        }
+        // PEANUTS end
         if (h.op == OP_DRAW || h.op == OP_DRAW_IDX) chunk_check();   // before a draw that opens a new pass
         switch (h.op) {   // a render pass a draw opened stays open across draws and state; anything else closes it first
         case OP_END: case OP_BEGIN: case OP_JUMP: case OP_CALL: case OP_SIGNAL_EVENT: case OP_REPORT_COUNTER: case OP_FENCE_SYNC: case OP_RENDER_COND: case OP_RESET_COUNTER: case OP_WAIT_EVENT: case OP_WAIT_SYNC:
@@ -1735,7 +1749,7 @@ static int exec(const uint8_t *p, int depth) {   // 1: parked at a wait (g_pk ho
         case OP_RESET_COUNTER: { uint64_t t; memcpy(&t, a, 8); if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) oq_reset(); break; }
         case OP_CLEAR_BUF: mdx_write(); if (g_cb) { const p_clear_buf *cb = a; vka_rw_pre(g_cb); buf_fill(cb->addr, cb->size, cb->value); vka_barrier(g_cb); vka_rw_point(g_cb, 'f', 0, cb->value, cb->addr); } break;
         case OP_COPY_B2B: mdx_write(); if (g_cb) { uint64_t s_, d, n; memcpy(&s_, a, 8); memcpy(&d, (const uint8_t *)a + 8, 8); memcpy(&n, (const uint8_t *)a + 16, 8); vka_rw_pre(g_cb); buf_copy(s_, d, n); vka_barrier(g_cb); vka_rw_point(g_cb, 'c', 0, s_, d); } break;
-        case OP_UPDATE_UB: mdx_write(); g_n_ub++; if (g_cb) { uint64_t d, n; memcpy(&d, a, 8); memcpy(&n, (const uint8_t *)a + 8, 8); if (!vka_rp_ub_defer(d, n, (const uint8_t *)a + 16)) { vka_rp_end(); vka_rw_pre(g_cb); buf_update((const uint8_t *)a + 16, d, n); vka_barrier(g_cb); vka_rw_point(g_cb, 'u', 0, n, d); } } break;
+        case OP_UPDATE_UB: mdx_write(); g_n_ub++; if (g_cb) { uint64_t d, n; memcpy(&d, a, 8); memcpy(&n, (const uint8_t *)a + 8, 8); if (!vka_rp_ub_defer(d, n, (const uint8_t *)a + 16)) { vka_rp_end(); vka_ub_flush(); vka_disp_settle(g_cb); /* PEANUTS: flush outside-pass UBs and settle dispatches before fallback */ vka_rw_pre(g_cb); buf_update((const uint8_t *)a + 16, d, n); vka_barrier(g_cb); vka_rw_point(g_cb, 'u', 0, n, d); } } break;
         case OP_SET_RT: S.rt = *(const p_set_rt *)a; S.has_rt = 1; break;
         case OP_SCISSOR: S.sc = *(const p_scissor *)a; S.has_sc = 1; break;
         case OP_COPY_STRIDE: { const p_copy_stride *cs = a; if (cs->image) S.copy_img_stride = cs->stride; else S.copy_stride = cs->stride; break; }

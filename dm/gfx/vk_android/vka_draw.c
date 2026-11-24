@@ -261,9 +261,11 @@ static void ub_flush(void) {
     // PEANUTS end
     if (last_n) vka_rw_point(g_cb, 'u', 0, last_n, last_d);
 }
+void vka_ub_flush(void) { if (!R.on && UB.n) { vka_disp_settle(g_cb); ub_flush(); } }   // PEANUTS: flush outside-pass deferred UBs
 static void inst_close(void);
 int vka_rp_ub_defer(uint64_t dst, uint64_t n, const void *data) {
-    if (!R.on || !n || n > 65536 || !VKA_ENV("DM_VK_UB_DEFER", 1)) return 0;
+    if (!g_cb || !n || n > 65536 || !VKA_ENV("DM_VK_UB_DEFER", 1)) return 0;   // PEANUTS: also allow outside a pass
+    if (!R.on && !VKA_ENV("DM_VK_UB_DEFER_OUTSIDE", 1)) return 0;   // PEANUTS: toggle just outside-pass deferral
     for (uint64_t done = 0; done < n;) {
         VkBuffer b; VkDeviceSize o; uint64_t k = vka_addr_run(dst + done, n - done, &b, &o);
         if (!k) return 0;
