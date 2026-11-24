@@ -415,6 +415,69 @@ int main(void) {
         g_test_users = 1;
     }
 
+    printf("⑩ Unmount of add-on content (multi-DLC): folder, RomFS image, slot reuse, and open handles\n");
+    {   extern int g_test_users; g_test_users = 1; g_nmnt = 0;
+        char aocd[1100], d1[1200], d2[1200], f[1300];
+        snprintf(aocd, sizeof aocd, "%s/aocd", root); mkdir(aocd, 0755);
+        snprintf(d1, sizeof d1, "%s/1", aocd); mkdir(d1, 0755);
+        snprintf(d2, sizeof d2, "%s/2", aocd); mkdir(d2, 0755);
+        snprintf(f, sizeof f, "%s/dlc1.txt", d1); put(f, "one");
+        snprintf(f, sizeof f, "%s/shared.txt", d1); put(f, "from1");
+        snprintf(f, sizeof f, "%s/dlc2.txt", d2); put(f, "two");
+        snprintf(f, sizeof f, "%s/shared.txt", d2); put(f, "from2");
+        setenv("DM_AOC_DIR", aocd, 1);
+
+        CHECK(h_fs_MountAoc("aoc", 1, NULL, 0) == RES_OK, "mount add-on 1 folder as aoc:");
+        CHECK(read_fs("aoc:/dlc1.txt", got, sizeof got) && !strcmp(got, "one"), "reads add-on 1's file");
+        CHECK(read_fs("aoc:/shared.txt", got, sizeof got) && !strcmp(got, "from1"), "reads add-on 1's shared file");
+        h_fs_Unmount("aoc");
+        CHECK(!h_fs_IsMounted("aoc"), "Unmount frees aoc: even with one user");
+        CHECK(h_fs_MountAoc("aoc", 2, NULL, 0) == RES_OK && g_nmnt == 1, "mount add-on 2 folder as aoc:, reusing slot 0");
+        CHECK(read_fs("aoc:/dlc2.txt", got, sizeof got) && !strcmp(got, "two"), "reads add-on 2's file");
+        CHECK(read_fs("aoc:/shared.txt", got, sizeof got) && !strcmp(got, "from2"), "reads add-on 2's shared file");
+        uint64_t fh = 0;
+        CHECK(h_fs_OpenFile(&fh, "aoc:/dlc1.txt", MODE_READ) != RES_OK, "add-on 1's file is no longer on aoc:");
+        h_fs_Unmount("aoc");
+
+        // RomFS images 1.img (/a="dlc1", /u="only1") and 2.img (/a="dlc2", /u="only2")
+        char aoci[1100], ip1[1200], ip2[1200];
+        snprintf(aoci, sizeof aoci, "%s/aoci", root); mkdir(aoci, 0755);
+        snprintf(ip1, sizeof ip1, "%s/1.img", aoci); snprintf(ip2, sizeof ip2, "%s/2.img", aoci);
+        {   uint8_t img[32 + 9 + 3 * 24 + 2] = {0}; uint64_t hd[3] = {41, 3 * 24 + 2, 3};
+            img_ent e[3] = {{1, 2, 0, 0, 0, 0}, {32, 4, 0, 1, 1, 0}, {36, 5, 1, 1, 1, 0}};
+            memcpy(img, "DMROMFS1", 8); memcpy(img + 8, hd, sizeof hd); memcpy(img + 32, "dlc1only1", 9); memcpy(img + 41, e, sizeof e); memcpy(img + 41 + sizeof e, "au", 2);
+            FILE *fp = fopen(ip1, "wb"); fwrite(img, 1, sizeof img, fp); fclose(fp);
+            memcpy(img + 32, "dlc2only2", 9);
+            fp = fopen(ip2, "wb"); fwrite(img, 1, sizeof img, fp); fclose(fp);
+        }
+        setenv("DM_AOC_DIR", aoci, 1); g_nmnt = 0;
+        int cycles = 0;
+        for (; cycles < MAX_MOUNT + 8; cycles++) {
+            int idx = (cycles & 1) ? 2 : 1;
+            if (h_fs_MountAoc("aoc", idx, NULL, 0) != RES_OK) break;
+            if (!read_fs("aoc:/a", got, sizeof got) || strcmp(got, idx == 1 ? "dlc1" : "dlc2")) break;
+            h_fs_Unmount("aoc");
+            if (g_mnt[0].img != NULL) break;
+        }
+        CHECK(cycles == MAX_MOUNT + 8 && g_nmnt == 1 && !g_mnt[0].img, "%d image mount/unmount cycles reuse slot 0 and close each image", MAX_MOUNT + 8);
+
+        // Open file handle kept across Unmount("aoc") + MountAoc("aoc", 2)
+        CHECK(h_fs_MountAoc("aoc", 1, NULL, 0) == RES_OK, "mount add-on 1 image");
+        uint64_t h1 = 0; CHECK(h_fs_OpenFile(&h1, "aoc:/u", MODE_READ) == RES_OK && h1, "open aoc:/u on add-on 1");
+        h_fs_Unmount("aoc");
+        CHECK(!g_mnt[0].name[0] && g_mnt[0].img != NULL, "unmounted with an open file: name cleared, image kept alive");
+        CHECK(h_fs_MountAoc("aoc", 2, NULL, 0) == RES_OK && g_nmnt == 2, "mount add-on 2 takes a new slot while slot 0's image is still open");
+        CHECK(read_fs("aoc:/a", got, sizeof got) && !strcmp(got, "dlc2"), "aoc: now reads add-on 2");
+        size_t nread = 0; memset(got, 0, sizeof got);
+        CHECK(h_fs_ReadFile(&nread, h1, 0, got, sizeof got - 1) == RES_OK && nread == 5 && !strcmp(got, "only1"), "the open handle from add-on 1 still reads add-on 1 (%s)", got);
+        h_fs_CloseFile(h1);
+        CHECK(g_mnt[0].img == NULL, "closing the last open handle closes the unmounted image and frees slot 0");
+        h_fs_Unmount("aoc");
+        CHECK(h_fs_MountAoc("aoc", 1, NULL, 0) == RES_OK && g_nmnt == 2 && !strcmp(g_mnt[0].name, "aoc"), "slot 0 is reused once its image is closed");
+        h_fs_Unmount("aoc");
+        unsetenv("DM_AOC_DIR");
+    }
+
     char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); system(cmd);
     printf("== %d checks, %d failed ==\n", checks, fails);
     return fails != 0;
