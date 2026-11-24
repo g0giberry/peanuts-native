@@ -457,7 +457,13 @@ void vka_rp_end(void) {
     g_zlog_pass = 0;
     vka_oq_pass_end();   // an occlusion query active in the pass ends inside it
     if (R.classic) vk.vkCmdEndRenderPass(g_cb); else vk.vkCmdEndRendering(g_cb);
-    vka_barrier(g_cb);   // the pass's writes before whatever reads them next (copies, the present, the next pass's samples)
+    // PEANUTS begin: scope pass-end barrier to the stages that wrote in this pass
+    VkPipelineStageFlags src = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkAccessFlags acc = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    if (R.df || R.sf) { src |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT; acc |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; }
+    if (R.swrite) { src |= VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT; acc |= VK_ACCESS_SHADER_WRITE_BIT; }
+    vka_barrier_stages(g_cb, src, acc, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+    // PEANUTS end
     vka_xp_ts(g_cb, 1);
     bcrt_flush();        // block-compressed targets drawn through shadows: their blocks back (bcrt_attach)
     ub_flush();          // inline uniform updates deferred during the pass: copied into placed guest RAM
@@ -1949,6 +1955,7 @@ static int draw_writes(vka_shader *const sh[VKA_NSTAGE], const vka_dstate *d) {
     if (sh[2] && sh[2]->gs_fx > 0) return 1;
     for (int st = 0; st < VKA_NSTAGE; st++) {
         if (!sh[st] || (st == 1 && d->rast_discard)) continue;
+        if (g_wk.n[st] < 0) return 1;   // PEANUTS: failed resource walk may write
         const vka_res *r = g_wk.r[st];
         for (int i = 0; i < g_wk.n[st]; i++) if ((r[i].flags & DMSH_VK_BF_RW) || r[i].what == VKA_R_IMG || r[i].what == VKA_R_GMEM_LOG) return 1;
     }
