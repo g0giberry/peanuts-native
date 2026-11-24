@@ -417,8 +417,10 @@ VkDescriptorSet vka_bindless_set(void);
 uint32_t vka_bindless_tex_slots(void);        // PEANUTS: the pool's sampled-image table length, 0 without the pool set
 VkDescriptorSetLayout vka_bindless_layout(void);
 void vka_barrier_at(VkCommandBuffer cb, const char *file, int line);   // a full memory barrier (the replay orders every transfer op after the previous one)
+void vka_barrier_stages_at(VkCommandBuffer cb, VkPipelineStageFlags src, VkAccessFlags src_acc, VkPipelineStageFlags dst, VkAccessFlags dst_acc, const char *file, int line);   // PEANUTS: stage-scoped memory barrier
 void vka_xp_ts(VkCommandBuffer cb, int site);   // DM_VK_XP_TS experiment (vka_tex.c)
 #define vka_barrier(cb) vka_barrier_at(cb, __FILE_NAME__, __LINE__)   // the site names the step that ends there in DM_VK_GPUPROF's report (vka_gprof.c)
+#define vka_barrier_stages(cb, s, sa, d, da) vka_barrier_stages_at(cb, s, sa, d, da, __FILE_NAME__, __LINE__)   // PEANUTS
 // The barrier a dispatch leaves pending (vka_draw.c vka_dispatch, "Dispatch order"): NVN orders one dispatch against the next only through the game's own barriers, so the
 // replay records the barrier after a dispatch only before other GPU work in the same command buffer (vka_disp_settle). Any full barrier recorded into it meanwhile settles it
 extern _Atomic(VkCommandBuffer) vka_disp_pend;

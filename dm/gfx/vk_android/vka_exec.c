@@ -89,7 +89,7 @@ void mtl_set_depth_zero(int on) { g_depth_zero = on != 0; }
 static void oq_stats(char *b, size_t n, double frames);   // (Occlusion queries)
 // Replay statistics every 300 frames (DM_VK_STATS=0: none): what a frame costs the GPU in passes and barriers (each pass loads and stores its attachments on a tiler), and the
 // CPU per draw (recording: mtl_sub_begin to vkEndCommandBuffer)
-extern uint64_t vka_n_rp, vka_n_bar; static uint64_t g_n_ub, g_n_sub, g_rec_ns, g_n_pclear, g_n_chunks;
+extern uint64_t vka_n_rp, vka_n_bar, vka_n_sbar; static uint64_t g_n_ub, g_n_sub, g_rec_ns, g_n_pclear, g_n_chunks;   // PEANUTS: vka_n_sbar
 static _Atomic uint64_t g_fstart[64], g_fstart_f[64];   // when the replay began recording each frame's first submission (its number mod 64): the adaptive floor's spans
 static uint64_t g_job_frame; static int g_job_frame_set;   // the frame of the submission the worker replays (vka_exec_sub_frame)
 void vka_exec_sub_frame(uint64_t f) { g_job_frame = f; g_job_frame_set = 1; }
@@ -127,12 +127,12 @@ void mtl_set_frame(uint64_t f) {
     { if (atomic_load_explicit(&vka_synclog_n, memory_order_relaxed) > 0) VLOG("sync frame %llu begins at %.2f ms", (unsigned long long)f, (now_ns() % 1000000000000ull) / 1e6); }
     skipwarn_frame(f);
     warm_frame(f);   // PEANUTS
-    static uint64_t f0, d0, rp0, b0, ub0, s0, r0, o0, pc0, ch0;
+    static uint64_t f0, d0, rp0, b0, sb0, ub0, s0, r0, o0, pc0, ch0;   // PEANUTS: sb0
     int on = VKA_ENV("DM_VK_STATS", 1) != 0;
     if (on && f - f0 >= 300) {
         double n = (double)(f - f0);
-        if (f0) VLOG("replay up to frame %llu: per frame %.0f draws, %.0f render passes, %.0f clears / copies (%.0f in a pass), %.0f full barriers, %.0f inline uniform updates, %.1f submissions (%.1f parts); recording %.2f ms a frame (%.2f us a draw)",
-                     (unsigned long long)f, (g_stat_draws - d0) / n, (vka_n_rp - rp0) / n, (g_stat_ops - o0) / n, (g_n_pclear - pc0) / n, (vka_n_bar - b0) / n, (g_n_ub - ub0) / n, (g_n_sub - s0) / n, (g_n_sub - s0 + g_n_chunks - ch0) / n, (g_rec_ns - r0) / n / 1e6,
+        if (f0) VLOG("replay up to frame %llu: per frame %.0f draws, %.0f render passes, %.0f clears / copies (%.0f in a pass), %.0f barriers (%.0f full, %.0f scoped), %.0f inline uniform updates, %.1f submissions (%.1f parts); recording %.2f ms a frame (%.2f us a draw)",   // PEANUTS: report both full and scoped barriers
+                     (unsigned long long)f, (g_stat_draws - d0) / n, (vka_n_rp - rp0) / n, (g_stat_ops - o0) / n, (g_n_pclear - pc0) / n, (vka_n_bar + vka_n_sbar - b0 - sb0) / n, (vka_n_bar - b0) / n, (vka_n_sbar - sb0) / n, (g_n_ub - ub0) / n, (g_n_sub - s0) / n, (g_n_sub - s0 + g_n_chunks - ch0) / n, (g_rec_ns - r0) / n / 1e6,
                      g_stat_draws > d0 ? (g_rec_ns - r0) / 1e3 / (double)(g_stat_draws - d0) : 0.0);
         { char pb[600]; void vka_draw_prof(char *b, size_t n, double draws); vka_draw_prof(pb, sizeof pb, (double)(g_stat_draws - d0)); if (pb[0]) VLOG("draw path per draw (us): %s", pb);
           vka_enc_stats(pb, sizeof pb, n); if (pb[0]) VLOG("%s", pb);
@@ -148,7 +148,7 @@ void mtl_set_frame(uint64_t f) {
           { void vka_draw_unplaced(char *b, size_t n); vka_draw_unplaced(pb, sizeof pb); if (pb[0]) VRED("%s", pb); } }   // PEANUTS: draws and buffers lost to memory that is not placed, while the counts move (vka_draw.c)
         { static uint64_t fc; if (f - fc >= 1800) { vka_disp_census(f); fc = f; } }   // (every 1,800 frames)
         vka_dobj_census(f);   // DM_VK_DISP_OBJ (its own interval)
-        f0 = f; d0 = g_stat_draws; rp0 = vka_n_rp; b0 = vka_n_bar; ub0 = g_n_ub; s0 = g_n_sub; r0 = g_rec_ns; o0 = g_stat_ops; pc0 = g_n_pclear; ch0 = g_n_chunks;
+        f0 = f; d0 = g_stat_draws; rp0 = vka_n_rp; b0 = vka_n_bar; sb0 = vka_n_sbar; ub0 = g_n_ub; s0 = g_n_sub; r0 = g_rec_ns; o0 = g_stat_ops; pc0 = g_n_pclear; ch0 = g_n_chunks;   // PEANUTS: sb0
     }
 }
 uint64_t vka_frame(void) { return g_frame; }
@@ -896,7 +896,14 @@ void vka_clear_outside(const vka_pclear *c) {
         if (c->whole) { VkImageSubresourceRange rg = {c->asp, c->lv, 1, c->l0, c->nl}; vk.vkCmdClearDepthStencilImage(g_cb, im->img, VK_IMAGE_LAYOUT_GENERAL, &val.depthStencil, 1, &rg); }
         else clear_rect(im, im->f.vk, c->asp, c->lv, c->l0, c->nl, c->rc, &val);
     }
-    vka_barrier(g_cb);
+    // PEANUTS begin: scope clear-outside barrier to transfer or attachment writes
+    int whole = c->ci >= 0 ? (c->whole && c->fmt == im->f.vk && !(im->d.target == NVN_TEXTURE_TARGET_3D && (c->l0 || c->nl < vka_img_slices(im, c->lv)))) : c->whole;
+    if (whole) vka_barrier_stages(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+    else vka_barrier_stages(g_cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+    // PEANUTS end
 }
 static void clear_color(const p_clear_color *c) {
     vka_rp_prep_clear(&S.rt, S.has_rt);

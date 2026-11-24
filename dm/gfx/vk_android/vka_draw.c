@@ -237,10 +237,16 @@ static void ub_flush(void) {
     if (!UB.n) return;
     int n = UB.n; UB.n = 0; UB.m_valid = 0;
     uint64_t last_d = 0, last_n = 0;
+    // PEANUTS begin: stage-scoped barriers for inline uniform buffer copies
+    vka_barrier_stages(g_cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     vka_rw_pre(g_cb);
     for (int i = 0; i < n; i++) {
         uint64_t dst = UB.e[i].dst, sz = UB.e[i].n; const uint8_t *data = UB.e[i].data;
-        for (int j = 0; j < i; j++) if (UB.e[j].dst < dst + sz && dst < UB.e[j].dst + UB.e[j].n) { vka_barrier(g_cb); break; }
+        for (int j = 0; j < i; j++) if (UB.e[j].dst < dst + sz && dst < UB.e[j].dst + UB.e[j].n) {
+            vka_barrier_stages(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            break;
+        }
         vka_span s; if (!sz || !vka_scratch(sz, 16, &s)) { VRED_ONCE("inline uniform update at %#llx (%llu bytes): no staging memory, the update is lost", (unsigned long long)dst, (unsigned long long)sz); continue; }
         memcpy(s.ptr, data, (size_t)sz);
         for (uint64_t done = 0; done < sz;) {
@@ -250,7 +256,9 @@ static void ub_flush(void) {
         }
         last_d = dst; last_n = sz;
     }
-    vka_barrier(g_cb);
+    vka_barrier_stages(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+    // PEANUTS end
     if (last_n) vka_rw_point(g_cb, 'u', 0, last_n, last_d);
 }
 static void inst_close(void);
@@ -3400,7 +3408,9 @@ static uint64_t g_disp_settled, g_disp_saved;   // pending barriers recorded lat
 uint64_t vka_disp_cleared;   // pending barriers a full barrier settled (vka_barrier_at), vka_disp_settle's own included
 void vka_disp_settle(VkCommandBuffer cb) {
     if (!cb || atomic_load_explicit(&vka_disp_pend, memory_order_relaxed) != cb) return;
-    g_disp_settled++; vka_barrier(cb);   // (clears vka_disp_pend)
+    g_disp_settled++;
+    vka_barrier_stages(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,   // PEANUTS: scope dispatch settle to compute writes
+                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);   // (clears vka_disp_pend)
 }
 // The census: dispatches by shader key and the game's call site (p_dispatch.caller, a module offset), so a log says whose work a frame's dispatches are
 int vka_mod_off(uint64_t addr, const char **name, uint64_t *off);   // vka_mem.c

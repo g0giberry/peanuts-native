@@ -139,7 +139,8 @@ static int fmt_of_slow(int nf, vka_fmt *o) {
 static VkImageAspectFlags aspect_of(int kind) { return kind == 3 ? VK_IMAGE_ASPECT_DEPTH_BIT : kind == 4 ? VK_IMAGE_ASPECT_STENCIL_BIT : kind == 5 ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT; }
 static int compressed(const vka_fmt *f) { return f->bw > 1 || f->bh > 1; }
 
-uint64_t vka_n_bar;   // full barriers recorded (vka_exec.c replay statistics)
+uint64_t vka_n_bar;    // full barriers recorded (vka_exec.c replay statistics)
+uint64_t vka_n_sbar;   // PEANUTS: stage-scoped barriers recorded (vka_exec.c replay statistics)
 // DM_VK_XP_TS=mask (experiment, live): a bottom-of-pipe timestamp (Turnip: a wait for idle) at chosen sites, to find which one the Turnip LRZ hang needs
 // (docs/reference/rendering.md "Turnip hangs in the first 3D frame of a cold run"): 1 after a pass end's barrier, 2 at an upload batch's end, 4 before a depth pass begins,
 // 8 after every other full barrier
@@ -165,6 +166,20 @@ void vka_barrier_at(VkCommandBuffer cb, const char *file, int line) {
     if (vka_gp_active) vka_gp_mark(cb, file, line);
     vka_xp_ts(cb, 8);
 }
+// PEANUTS begin: stage-scoped memory barrier (avoids ALL_COMMANDS -> ALL_COMMANDS drain when src/dst are narrower)
+void vka_barrier_stages_at(VkCommandBuffer cb, VkPipelineStageFlags src, VkAccessFlags src_acc, VkPipelineStageFlags dst, VkAccessFlags dst_acc, const char *file, int line) {
+    vka_n_sbar++;
+    if ((src & VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) && (src_acc & VK_ACCESS_SHADER_WRITE_BIT) &&
+        dst == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT && (dst_acc & (VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)) == (VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)) {
+        extern uint64_t vka_disp_cleared; VkCommandBuffer p = cb;
+        if (cb && atomic_compare_exchange_strong(&vka_disp_pend, &p, VK_NULL_HANDLE)) vka_disp_cleared++;
+    }
+    VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = src_acc, .dstAccessMask = dst_acc};
+    vk.vkCmdPipelineBarrier(cb, src, dst, 0, 1, &mb, 0, NULL, 0, NULL);
+    if (vka_gp_active) vka_gp_mark(cb, file, line);
+    vka_xp_ts(cb, 8);
+}
+// PEANUTS end
 void vka_img_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to) {
     VkImageMemoryBarrier b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT, .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
         .oldLayout = from, .newLayout = to, .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = img,

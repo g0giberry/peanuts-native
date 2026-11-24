@@ -111,7 +111,7 @@ void vka_ctl_sub(void) {   // mtl_sub_begin: the submit lock is held, no submiss
 }
 
 // ---------- Frame statistics: capture and stats ----------
-extern uint64_t vka_n_rp, vka_n_bar;   // vka_draw.c, vka_tex.c
+extern uint64_t vka_n_rp, vka_n_bar, vka_n_sbar;   // vka_draw.c, vka_tex.c (PEANUTS: vka_n_sbar)
 void vka_exec_counts(uint64_t *ops, uint64_t *subs, uint64_t *rec_ns);   // vka_exec.c
 double mtl_gpu_ms(uint64_t f);
 enum { NREC = 128 };
@@ -120,7 +120,7 @@ static frec g_rec[NREC];
 static _Atomic long g_capture; static uint64_t g_cap_from, g_cap_to; static _Atomic int g_stats;
 static void snap(frec *r, uint64_t f) {
     r->frame = f; r->t = now_ns(); uint64_t pipes; vka_draw_stats(&r->draws, &r->skipped, &r->disp, &pipes);
-    r->rp = vka_n_rp; r->bar = vka_n_bar; vka_exec_counts(&r->ops, &r->subs, &r->rec_ns);
+    r->rp = vka_n_rp; r->bar = vka_n_bar + vka_n_sbar; vka_exec_counts(&r->ops, &r->subs, &r->rec_ns);   // PEANUTS: total barriers
 }
 static void cap_line(uint64_t f) {   // frame f, once its GPU time is in (8 frames on)
     const frec *a = &g_rec[f % NREC], *b = &g_rec[(f + 1) % NREC];
