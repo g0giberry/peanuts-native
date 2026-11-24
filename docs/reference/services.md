@@ -267,13 +267,15 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Fix:** `aoc::CountAddOnContent` and `ListAddOnContent` run on the big host stack (`HLE_FORCE_BIG`, `hle_misc.c`).
 - **Found on:** [Digimon Story Cyber Sleuth: Complete Edition](../../dm/games/010014E00DB56000/README.md) (SDK 6.4.0; one boot).
 
+<!-- PEANUTS begin: unmounting add-on content and non-save mounts -->
 ### Unmounting add-on content and non-save mounts
 
 - **Symptom:** a game with multiple DLC packs that mounts each add-on under the same mount name (such as `"aoc"`), unmounts it, and mounts the next index only ever sees the first DLC pack (`1.nup:aoc/1`), causing later packs to go undetected.
 - **Cause:** `h_fs_Unmount` (`hle_fs.c`) returned early when `dm_account_users() < 2` and only cleared entries with `save != 0`. When the game called `nn::fs::Unmount("aoc")` and then `nn::fs::MountAddOnContent("aoc", 2)`, `mount_ex` saw `"aoc"` still in `g_mnt[]` and returned `RES_OK` without replacing the mount.
-- **Fix:** `h_fs_Unmount` now frees non-save mounts (`!save`) regardless of user count, while preserving single-user save unmount as a no-op. When a non-save image mount is unmounted, its `romfs_img` (file descriptor, index, NUP cache, and `DM_FSLOG` path table) is closed once all open file handles (`img_refs`) on that mount have closed, and `mount_ex` reuses freed slots once no open image or shared transaction references them.
-- **Check:** `t_fs` section 10 verifies mounting/unmounting multiple DLC folders and RomFS images under `"aoc"`, 520 repeated mount/unmount cycles reusing slot 0 without `MAX_MOUNT` exhaustion, and open file handles remaining valid across `Unmount` + remount until `CloseFile`.
+- **Fix:** `h_fs_Unmount` now frees non-save mounts (`!save`) regardless of user count once `mount_refs` reaches 0, while preserving single-user save unmount as a no-op; duplicate non-save mounts of the same target increment `mount_refs`, while a different target under an active mount name returns `0x7802` (`ResultMountNameAlreadyExists`). Open image mounts are backed by detached `g_imgs[]` slots with a per-slot lock, atomic refcount, `closing` state, and 16-bit handle generation number so `ReadFile`, `GetFileSize`, and `CloseFile` never contend with `g_path_lock` during Android save copies, unmounted mount slots are freed immediately, and stale or double-closed handles cannot unbalance a reused slot. Freed multi-user save slots with open `g_ftxn` descriptors are also skipped by `mount_ex` until those descriptors close.
+- **Check:** `t_fs` section 10 verifies mounting/unmounting multiple DLC folders and RomFS images under `"aoc"`, 520 repeated mount/unmount cycles, detached image lifetime across `Unmount` + remount, duplicate mounts and `0x7802` conflict, handle generation mismatch after slot reuse, failed soft add-on mount cleanup, concurrent `GetFileSize`/`ReadFile`/`CloseFile` while `g_path_lock` is held, and open save-fd slot protection.
 - **Found on:** Hyrule Warriors: Age of Calamity (1.3.0, `01002B00111A2000`, [peanuts-native#396](https://github.com/igawa6/peanuts-native/issues/396)).
+<!-- PEANUTS end -->
 
 ## Input
 
