@@ -540,6 +540,15 @@ $(B)/t_android_tf: t_android_tf.c $(VKA)/vka_tf_spv.c $(VKA)/vka_tf.h $(VKA)/vka
 android-tf: $(B)/t_android_tf
 	$(B)/t_android_tf
 # PEANUTS end
+# PEANUTS begin: frame-generation pacing loop (vka_fg_pace.h + lsfg/lsfg_pacer.c): closed-loop FIFO + display-timing recovery from temporary slowdowns.
+# Built with run; android-fgpace builds and runs it
+run: $(B)/t_android_fgpace
+$(B)/t_android_fgpace: t_android_fgpace.c $(VKA)/vka_fg_pace.h $(VKA)/lsfg/lsfg_pacer.c $(VKA)/lsfg/lsfg.h | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -fsanitize=address,undefined -I.. -o $@ t_android_fgpace.c $(VKA)/lsfg/lsfg_pacer.c -lm
+.PHONY: android-fgpace
+android-fgpace: $(B)/t_android_fgpace
+	$(B)/t_android_fgpace
+# PEANUTS end
 # PEANUTS begin: the panel's refresh grid (vka_panel.h): the period estimate from actual present times, a pacing period as whole refreshes, the chain of desired
 # present times (DM_VK_PACE_PANEL, DM_VK_PRESENT_GRID). Built with run; android-panel builds and runs it
 run: $(B)/t_android_panel
