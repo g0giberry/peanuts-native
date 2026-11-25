@@ -1687,7 +1687,10 @@ static int exec(const uint8_t *p, int depth) {   // 1: parked at a wait (g_pk ho
         case OP_COPY_T2B: case OP_COPY_T2T: case OP_REPORT_COUNTER: vka_disp_settle(g_cb); break;   // PEANUTS: OP_UPDATE_UB settles only on fallback / flush
         default: break;
         }
-        // PEANUTS begin: flush outside-pass deferred inline uniform updates before the next GPU consumer
+        // PEANUTS begin: flush outside-pass deferred inline uniform updates before the next GPU consumer.
+        // OP_SIGNAL_EVENT / OP_FENCE_SYNC publish only on GPU completion (after sub_commit / submission end flush,
+        // and any waiter goes through OP_WAIT_EVENT / OP_WAIT_SYNC); OP_REPORT_COUNTER only writes queries or posts
+        // completion records; OP_RENDER_COND evaluates rc_known() on the CPU from completed report records.
         if (h.op != OP_UPDATE_UB) {
             switch (h.op) {
             case OP_DRAW: case OP_DRAW_IDX: case OP_DRAW_TEX: case OP_CLEAR_COLOR: case OP_CLEAR_DS: case OP_CLEAR_TEX: case OP_CLEAR_BUF:
