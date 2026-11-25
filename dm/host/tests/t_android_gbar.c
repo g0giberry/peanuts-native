@@ -111,6 +111,14 @@ int main(void) {
     vkgb_reset(&g); memset(&s, 0, sizeof s); CHECK(vkgb_game(&g, 0, 1, &s) == 0, "a barrier in a new command buffer before its first full barrier was taken");
     fresh(); cmd(VKGB_C_DISPATCH, &ind); CHECK(vkgb_game(&g, 0, 0, &s) == 0 && s.full == 1, "DM_VK_BAR_NARROW=0 took a barrier");
 
+    // PEANUTS begin: vka_gbar.c g_vkCmdPipelineBarrier() cases: COMPUTE->ALL (VKGB_C_FULL) avoids duplicate settle, and scoped->ALL resets since=VKGB_NONE
+    fresh(); cmd(VKGB_C_DISPATCH, &ind); CHECK(vkgb_game(&g, 0, 1, &s) == 1, "pending before COMPUTE->ALL");
+    CHECK(cmd(VKGB_C_FULL, &ind) == VKGB_B_NONE && s.settled == 0 && g.since == VKGB_NONE, "COMPUTE->ALL avoided duplicate settle");
+    fresh(); cmd(VKGB_C_DISPATCH, &ind); cmd(VKGB_C_WORK, &ind); g.since = VKGB_NONE;
+    cmd(VKGB_C_DISPATCH, &ind);
+    CHECK(vkgb_game(&g, 0, 1, &s) == 1 && s.full == 0, "next game barrier after scoped->ALL (since=VKGB_NONE) was taken");
+    // PEANUTS end
+
     // Every sequence of up to 8 commands, with the switch on and off
     int seq[8], total = 0;
     for (int n = 1; n <= 8 && fails < 5; n++) {
