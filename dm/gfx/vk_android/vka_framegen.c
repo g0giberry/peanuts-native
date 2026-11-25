@@ -55,7 +55,7 @@ int nxhost_framegen_status(char *buf, int n) {
 
 #ifndef NX_LSFG
 int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence, int format,
-                 double acq_s, double game_wait_s, vka_img **gen, double *hold, double *out_period) {   // PEANUTS(upstream-candidate)   // PEANUTS(upstream-candidate)
+                 double acq_s, double game_wait_s, vka_img **gen, double *hold, double *out_period) {   // PEANUTS(upstream-candidate)
     (void)serial; (void)crop; (void)period; (void)fence; (void)format; (void)acq_s; (void)game_wait_s; (void)gen;
     settings_init(); *hold = 0; *out_period = 0;
     if (atomic_load(&g_on) > 0) { atomic_store(&g_state, -1); reason("%s", "not in this build (built without NX_LSFG)"); vka_fps_fg(-1, 1); }
