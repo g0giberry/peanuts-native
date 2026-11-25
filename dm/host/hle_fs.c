@@ -353,6 +353,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn, int s
             // PEANUTS begin: duplicate non-save mounts of the same dir increment mount_refs so a single Unmount keeps them mounted; a different dir returns 0x7802 (MountNameAlreadyExists)
             if (!g_mnt[i].save) {
                 if (!txn && !strcmp(g_mnt[i].dir, dir)) { g_mnt[i].mount_refs++; pthread_mutex_unlock(&g_lock); return RES_OK; }
+                LOG("[RED] fs mount %s: already mounted at %s, not %s (returning 0x7802)", name, g_mnt[i].dir, dir);
                 pthread_mutex_unlock(&g_lock); return RES_MOUNT_NAME_EXISTS;
             }
             // PEANUTS end
