@@ -100,7 +100,7 @@ public final class RecommendJvmTest {
         check(Recommend.index(Recommend.UPSCALERS, "sgsr1") == 4 && Recommend.index(Recommend.DLSS_MODES, "fsr3") == 3 && Recommend.index(Recommend.DRS_VALUES, "40") == 5
               && Recommend.index(Recommend.UPSCALERS, null) == -1, "indices");
         check(Recommend.bool("on", false) && !Recommend.bool("off", true) && Recommend.bool(null, true) && !Recommend.bool("x", false), "on / off");
-        check(Recommend.cap("60", true) == 0 && Recommend.cap("30", true) == 30 && Recommend.cap("own", true) == -2 && Recommend.cap("15", true) == null, "a limited game's caps (60 is stored as 0, own is -2)");
+        check(Recommend.cap("60", true) == 0 && Recommend.cap("30", true) == 30 && Recommend.cap("15", true) == null, "a limited game's caps (60 is stored as 0)");
         check(Recommend.cap("own", false) == 0 && Recommend.cap("60", false) == 60 && Recommend.cap("45", false) == null && Recommend.cap(null, false) == null, "the other games' caps");
         check(Recommend.capName(0, true).equals("60") && Recommend.capName(30, true).equals("30") && Recommend.capName(0, false).equals("own") && Recommend.capName(-1, false).equals("unset")
               && Recommend.capName(-2, true).equals("own"),   // PEANUTS: Game owned, not 60

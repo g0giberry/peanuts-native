@@ -199,12 +199,9 @@ final class Recommend {
     static boolean bool(String v, boolean dflt) { return "on".equals(v) ? true : "off".equals(v) ? false : dflt; }
     static String onOff(boolean on) { return on ? "on" : "off"; }
 
-    /** A frame rate cap value as the launcher stores it: a limited game's PACE_CAPS value (60 is 0, own is -2), else FPS_CAPS'; null for none */
+    /** A frame rate cap value as the launcher stores it: a limited game's PACE_CAPS value (60 is 0), else FPS_CAPS'; null for none */
     static Integer cap(String v, boolean limited) {
-        if (limited) {
-            if ("own".equals(v)) return -2;   // PEANUTS: FrameRateCaps.GAME_OWNED
-            int i = index(PACE, v); return i < 0 ? null : i == 0 ? 0 : Integer.parseInt(v);
-        }
+        if (limited) { int i = index(PACE, v); return i < 0 ? null : i == 0 ? 0 : Integer.parseInt(v); }
         int i = index(CAPS, v);
         return i < 0 ? null : i == 0 ? 0 : Integer.parseInt(v);
     }
