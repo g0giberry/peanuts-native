@@ -44,7 +44,16 @@ class Error(ValueError): pass
 # image) is opened with O_RDONLY | O_BINARY (0 elsewhere) and read with pread, os.pread where there is one, else a seek and reads under a lock (each stream has a
 # descriptor of its own; the lock keeps two threads reading one stream from moving its position under each other)
 O_RDONLY = os.O_RDONLY | getattr(os, 'O_BINARY', 0)
-if hasattr(os, 'pread'): pread = os.pread
+if hasattr(os, 'pread'):
+    _os_pread = os.pread
+    def pread(fd, n, offset, /):   # PEANUTS(upstream-candidate): macOS rejects os.pread(n >= 2 GiB) with EINVAL
+        if n <= (1 << 30): return _os_pread(fd, n, offset)
+        out = []
+        while n > 0:
+            b = _os_pread(fd, min(n, 1 << 30), offset)
+            if not b: break
+            out.append(b); offset += len(b); n -= len(b)
+        return b''.join(out)
 else:
     import threading
     _seek_lock = threading.Lock()

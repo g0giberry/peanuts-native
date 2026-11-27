@@ -782,3 +782,12 @@ Games read this count as a position in their own command memory and size their h
 - **Cause:** `agl`'s sampler pool manager (`main+0x980e20` in Super Mario Odyssey 1.4.1, SDK 7.3.2) deduplicates `NVNsampler` objects by hashing bytes `[0x08..0x60)` (`0x58` bytes, skipping real NVN's 8-byte header) before calling `nvnSamplerCompare`. Two mismatches broke deduplication: (1) `nvnSamplerInitialize` (`hle_nvn.c`) did not zero trailing bytes of `NVNsampler` (`0x60` bytes on SDK ≤ 10 / NVN 53; `0x30` bytes on NVN 55+), leaving stack garbage in the hashed range; and (2) `samp_t` (`nvn_obj.h`) placed `samp_par` at offset `+4`, leaving `minf`, `magf`, `ws` and `wt` before `+8` so samplers differing only in filter/wrap collided in the hash and missed. The resulting ~23–60 re-registrations per frame wrapped the 4,096-entry sampler ring buffer, overwriting an older `lod 0..0` slot with `lod 2..2`–`4..4` in the same frame a bloom downsample pass reused it.
 - **Fix:** align `samp_t.p` to offset `+8` (`uint32_t magic, pad; samp_par p;`, still 48 bytes / `0x30` so it fits `NVNsampler` on all SDKs) and zero the full object in `nvnSamplerInitialize` (`0x60` bytes when `dm_sdk_major() > 0 && dm_sdk_major() <= 10 && !dm_sdk_ounce()`, else `sizeof(NVNsampler)`). Checked in `dm/gfx/tests/t_nvn.c`.
 - **Found on:** [Super Mario Odyssey](../../dm/games/0100000000010000/README.md#rendering) 1.4.1 (AYN Odin 3, Turnip v27.0.0-R3 and Stock Qualcomm `V@0800.72`: 0 spikes in 25 s and 0 sampler registrations in 2 s on both drivers).
+
+
+### Unfenced nvnSyncWait returning timeout on early spin
+
+<!-- PEANUTS: an entry of this fork. -->
+- **Symptom:** game render thread spins indefinitely on an `NVNsync` wait before its first `nvnWindowAcquireTexture` instead of proceeding with frame submission.
+- **Cause:** `nvnSyncWait()` (`dm/gfx/nvn/hle_nvn.c`) returned `NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED` when called on a sync object that had never been fenced (`!o->fenced`), inconsistent with `nvnQueueWaitSync()` and real NVN semantics where an unfenced/initialized sync is already signaled.
+- **Fix:** return `NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED` when `!o->fenced` in `nvnSyncWait()`. Checked in `dm/gfx/tests/t_nvn.c`.
+- **Found on:** [DOOM](../../dm/games/0100416004C00000/README.md#found-on-this-game).

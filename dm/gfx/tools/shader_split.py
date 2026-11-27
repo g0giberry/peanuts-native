@@ -50,6 +50,7 @@
 #       Mac host), each a VNVN record with one code area and control section (frostbite.py), see frostbite_jobs and frostbite_shaders
 #   · PDAT (the engine with the namespace phx, Kirby Air Riders): flatbuffer records tagged PMAP, zstd frames in the .dat archives, each holding a program's control sections and code areas, see pdat_jobs and pdat_shaders
 #   · Unreal Engine 3 (Batman: Arkham Knight): shader records in its global shader cache (BMSG) and in the packages (the combined shader cache), whose compressed chunks are Oodle blocks decoded by the game's own decoder in the Mac host, see ue3_body and ue3_shaders
+#   · id Tech 6 (DOOM): GLSLC outputs in generated/nx/*.sb entries (raw deflate) of .resources / .patch archives indexed by \x05SER .index / .pindex files, see idtech6_jobs and idtech6_shaders   PEANUTS(upstream-candidate)
 # Code area: 0x30 header + (graphics) 0x50 SPH + instructions; header magic 0x12345678 for graphics, 0x12345679 for compute. The control section starts with 0x98761234, +0x704 = code area length,
 #   +0x700 = start of the c1 constant segment within the code area; for compute +0x748 thread group xyz (u32 ×3), +0x754 shared memory bytes (checked one by one against PC reflection on D2R's 22 compute shaders).
 # Stage: BNSH uses the stage slot; BAHS uses bits 10..13 of SPH word 0 (1 vertex 2 hull 3 domain 4 geometry 5 pixel), and a compute header means compute.
@@ -1281,6 +1282,67 @@ def ttdat_shaders(path, rel, ents, out):
             try: d = ttdat.read(path, e, f)
             except ValueError as x: print(f'[RED] /{rel}/{e[0]}: {x}; not scanned', flush=True); continue
             scan_blob(d, f'/{rel}/{e[0]}', out)
+
+# PEANUTS(upstream-candidate): id Tech 6 \x05SER .index / .pindex + .resources / .patch archives (DOOM).
+IDTECH6_SER = b'\x05SER'
+_ID6_IDX_RE = re.compile(r'^(.*?)(?:_(\d+)\.pindex|\.pindex|\.index)$')
+def idtech6_jobs(files, parts=64):
+    """id Tech 6 resource archives (DOOM: base/gameresources.resources + .patch/_002.patch/_003.patch, indexed by \x05SER .index / .pindex). Reads the newest index of
+    each group, selects generated/nx/*.sb (and any *.sb) shader bundles, and splits each archive's entries into up to parts jobs. → (jobs, taken paths)"""
+    by_rel = {r: (p, r) for p, r in files}
+    groups = {}
+    for p, r in files:
+        m = _ID6_IDX_RE.match(r)
+        if not m: continue
+        prefix, num = m.group(1), m.group(2)
+        ver = int(num) if num is not None else (1 if r.endswith('.pindex') else 0)
+        groups.setdefault(prefix, []).append((ver, p, r))
+    jobs, taken = [], set()
+    for prefix, idxs in groups.items():
+        data_re = re.compile(r'^' + re.escape(prefix) + r'(?:\.resources|\.patch|_(\d+)\.patch)$')
+        data_files = {}
+        for r, pr in by_rel.items():
+            m = data_re.match(r)
+            if not m: continue
+            pnum = int(m.group(1)) if m.group(1) is not None else (1 if r.endswith('.patch') else 0)
+            data_files[pnum] = pr
+        if not data_files: continue
+        _, ip, ir = max(idxs, key=lambda x: x[0])
+        with open(ip, 'rb') as f: d = f.read()
+        if len(d) < 36 or d[:4] != IDTECH6_SER or struct.unpack_from('>I', d, 4)[0] != len(d) - 32: continue
+        count = struct.unpack_from('>I', d, 32)[0]
+        pos = 36
+        by_data = {}
+        for _ in range(count):
+            pos += 4
+            l1 = struct.unpack_from('<I', d, pos)[0]; pos += 4 + l1
+            l2 = struct.unpack_from('<I', d, pos)[0]; pos += 4 + l2
+            l3 = struct.unpack_from('<I', d, pos)[0]; pos += 4
+            epath = d[pos:pos + l3].decode('latin1'); pos += l3
+            off, sz, csz, _, pnum = struct.unpack_from('>QIIIB', d, pos); pos += 21
+            if epath.endswith('.sb') and sz > 0 and pnum in data_files:
+                by_data.setdefault(data_files[pnum], []).append((epath, off, sz, csz))
+        if pos != len(d): red(f'/{ir}: unexpected \x05SER index length {pos} != {len(d)}')
+        for _, ip2, _ in idxs: taken.add(ip2)
+        for dp, _ in data_files.values(): taken.add(dp)
+        for (dp, dr), ents in sorted(by_data.items()):
+            ents.sort(key=lambda e: e[1])
+            step = max(sum(e[3] for e in ents) / parts, 1)
+            cur, acc = [], 0
+            for e in ents:
+                cur.append(e); acc += e[3]
+                if acc >= step: jobs.append((dp, dr, (IDTECH6_SER, tuple(cur)))); cur, acc = [], 0
+            if cur: jobs.append((dp, dr, (IDTECH6_SER, tuple(cur))))
+    return jobs, taken
+
+def idtech6_shaders(path, rel, ents, out):
+    """A range of id Tech 6 .sb shader bundles from a .resources / .patch archive, raw-deflate decompressed when csz != sz and scanned as GLSLC outputs."""
+    import zlib
+    with open(path, 'rb') as f:
+        for nm, off, sz, csz in ents:
+            f.seek(off); raw = f.read(csz)
+            dec = zlib.decompressobj(-15).decompress(raw) if csz != sz else raw
+            out += glslc_shaders(dec, f'/{rel}#{nm}', need=False)
 
 # PEANUTS: Split Diablo III packages by byte range.
 D3CPK = b'D3CPK'   # job tag of a Diablo III package's byte range (d3cpk_jobs)
@@ -3781,6 +3843,9 @@ def scan_file_in(args):
     if len(args) > 2 and args[2][0] == TTDAT:   # PEANUTS: files of a TT Games DAT archive (ttdat_jobs)
         ttdat_shaders(path, rel, args[2][1], found)
         return rel, uniq_keys(found), var_pairs(found), trees
+    if len(args) > 2 and args[2][0] == IDTECH6_SER:   # PEANUTS(upstream-candidate): id Tech 6 .resources/.patch .sb shader bundles (idtech6_jobs)
+        idtech6_shaders(path, rel, args[2][1], found)
+        return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and head[:4] == CPK:   # entries of a CRI CPK (cpk_jobs)
         cpk_shaders(path, rel, args[2], found)
         return rel, uniq_keys(found), var_pairs(found), trees
@@ -4591,9 +4656,10 @@ def scan_jobs(files, want=None, mains=(), nros=()):
     pd_jobs, pdats = pdat_jobs(by_head)
     mv_jobs, mvgls = mvgl_jobs(by_head)   # PEANUTS: Digimon Story Time Stranger's 64-bit MVGL archives
     tt_jobs, tts = ttdat_jobs(by_head)   # PEANUTS: LEGO CITY UNDERCOVER's TT Games DAT archives
+    id6_jobs, id6s = idtech6_jobs(files)   # PEANUTS(upstream-candidate): id Tech 6 .resources/.patch archives (DOOM)
     # PEANUTS: Schedule package ranges alongside other split jobs.
-    big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ck_jobs + d3_jobs + cr_jobs + zp_jobs + ah_jobs + fb_jobs + pd_jobs + mv_jobs + tt_jobs   # PEANUTS: + mv_jobs, + tt_jobs
-    files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in cpks and p not in d3s and p not in cras and p not in zips and p not in arhs and p not in fbs and p not in pdats and p not in mvgls and p not in tts]   # PEANUTS: and mvgls, and tts
+    big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ck_jobs + d3_jobs + cr_jobs + zp_jobs + ah_jobs + fb_jobs + pd_jobs + mv_jobs + tt_jobs + id6_jobs   # PEANUTS: + mv_jobs, + tt_jobs, + id6_jobs
+    files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in cpks and p not in d3s and p not in cras and p not in zips and p not in arhs and p not in fbs and p not in pdats and p not in mvgls and p not in tts and p not in id6s]   # PEANUTS: and mvgls, and tts, and id6s
     if want is not None: big, files = [j for j in big if j[1] in want], [f for f in files if f[1] in want]
     return big, files
 

@@ -1617,24 +1617,40 @@ void vka_tex_own(vka_img *im, VkCommandBuffer cb) {
 
 // PEANUTS begin: Adreno's low-resolution depth (LRZ) across depth buffers, after nx2android's Vulkan backend (gfx_vk_exec.c lrz_touch / pass_commit, commits
 // d8c685a and 79e7074): the driver applied the LRZ of the depth buffer used before in the binning of later passes on other depth images and culled whole triangles
-// (Xenoblade Chronicles 3's cloud dome, 13 Sentinels' checkerboard of stale bins). A transfer write into the image a pass switches away from drops it; a one-texel read
-// before a pass that loads its depth drops a stale one of its own. vka_draw.c rp_begin calls this before a pass with a depth image when DM_VK_LRZ_TOUCH=1 (live,
-// default 0 until a game here is shown to need it). The image switched away from is kept to this submission (its last fence) so the copy never meets a freed image
+// (Xenoblade Chronicles 3's cloud dome, 13 Sentinels' checkerboard of stale bins, DOOM's depth pass). vka_draw.c rp_begin calls this before a pass with a depth image
+// when DM_VK_LRZ_TOUCH!=0 (live; default 1 on Qualcomm's driver, 0 on others):
+//   0 = off
+//   1 = on a depth-buffer switch (prev != cur), write 1 texel back to prev and, if the new pass loads cur, read 1 texel from cur (stage-scoped barriers)
+//   2 = also read 1 texel from cur on same-depth LOAD_OP_LOAD passes
+// The image switched away from is kept to this submission (its last fence) so the copy never meets a freed image
 static void lrz_copy(VkCommandBuffer cb, vka_img *im, int write) {
     if (!im || !im->img || !(im->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || im->samples > 1) return;   // (a multisampled image cannot be copied to a buffer)
     vka_span s; if (!vka_scratch(16, 16, &s)) return;
     VkBufferImageCopy c = {s.off, 0, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, {0, 0, 0}, {1, 1, 1}};
-    vka_barrier(cb); vk.vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, s.buf, 1, &c); vka_barrier(cb);
-    if (write) { vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &c); vka_barrier(cb); }   // the same texel back: unchanged
+    vka_barrier_stages(cb, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    vk.vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, s.buf, 1, &c);
+    if (write) {
+        vka_barrier_stages(cb, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_TRANSFER_WRITE_BIT,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+        vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);   // the same texel back: unchanged
+    }
+    vka_barrier_stages(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
 }
-void vka_lrz_touch(VkCommandBuffer cb, vka_img *cur, int loads) {
+void vka_lrz_touch(VkCommandBuffer cb, vka_img *cur, int loads, int mode) {
     vka_img *prev = NULL;
     pthread_mutex_lock(&g_tmu);
     if (g_lrz_prev && g_lrz_prev != cur) { prev = g_lrz_prev; prev->last_fence = vto_retire_fence(prev->last_fence, g_recorded_fence); }   // PEANUTS: this recording, not another fence after it
     g_lrz_prev = cur;
     pthread_mutex_unlock(&g_tmu);
-    if (prev) lrz_copy(cb, prev, 1);
-    if (loads) lrz_copy(cb, cur, 0);
+    if (prev) { lrz_copy(cb, prev, 1); if (loads) lrz_copy(cb, cur, 0); }
+    else if (loads && mode >= 2) lrz_copy(cb, cur, 0);
 }
 // PEANUTS end
 
@@ -3689,6 +3705,8 @@ static VkFormat class_twin(VkFormat v, int cls) {
     for (size_t i = 0; i < sizeof t / sizeof *t; i++) for (int c = 0; c < 3; c++) if (t[i].f[c] == v) return t[i].f[cls];
     if (v == VK_FORMAT_R16_UNORM || v == VK_FORMAT_R16_SNORM) return cls == 1 ? VK_FORMAT_R16_UINT : cls == 2 ? VK_FORMAT_R16_SINT : VK_FORMAT_UNDEFINED;
     if (v == VK_FORMAT_R16G16_UNORM || v == VK_FORMAT_R16G16_SNORM) return cls == 1 ? VK_FORMAT_R16G16_UINT : cls == 2 ? VK_FORMAT_R16G16_SINT : VK_FORMAT_UNDEFINED;
+    if (v == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || v == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32)
+        return cls == 1 ? VK_FORMAT_R32_UINT : cls == 2 ? VK_FORMAT_R32_SINT : VK_FORMAT_UNDEFINED;
     return VK_FORMAT_UNDEFINED;
 }
 // The Vulkan format texture ID id is viewed in (its texture view's, else its own), UNDEFINED for none. Not its image's: textures of one memory and shape share an image made in

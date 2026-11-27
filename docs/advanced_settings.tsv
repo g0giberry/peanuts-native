@@ -595,7 +595,7 @@ DM_VK_LC_GLOBAL	developer	Graphics			text			both
 DM_VK_LEVEL_SHARE	developer	Graphics			text			both						
 DM_VK_LOG	internal	Diagnostics			text			both						Mac or iOS only
 DM_VK_LOW_RAM	developer	Memory			text			both						
-DM_VK_LRZ_TOUCH	developer	Input			text			both						
+DM_VK_LRZ_TOUCH	developer	Graphics			text		1 with Qualcomm's driver, 0 with others	both						
 DM_VK_MAPS	developer	Graphics			text			both						
 DM_VK_MAPS_BUDGET	developer	Graphics			text			both						
 DM_VK_MAPS_CACHE	developer	Diagnostics			text			both						

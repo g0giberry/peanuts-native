@@ -696,7 +696,7 @@ static int rp_begin(const p_set_rt *rt, int has_rt, const p_scissor *sc, int has
         else vka_clear_outside(c);
     }
     if (sp) sp = &sa;
-    if ((dp || sp) && VKA_ENV("DM_VK_LRZ_TOUCH", 0)) vka_lrz_touch(g_cb, s_im[8], dp && da.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD);   // PEANUTS: Adreno LRZ (vka_tex.c)
+    { int lrz = VKA_ENV("DM_VK_LRZ_TOUCH", V.driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY); if ((dp || sp) && lrz) vka_lrz_touch(g_cb, s_im[8], dp && da.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD, lrz); }   // PEANUTS: Adreno LRZ (vka_tex.c)
     #undef INAREA
     #undef WHOLE
     vka_tex_feedback(fb_im, fb_lv, nfb);
@@ -3042,8 +3042,14 @@ static void draw_body(vka_dstate *d, const p_set_rt *rt, int has_rt, const p_sci
     DY_SET1(rd, (uint32_t)(d->rast_discard != 0), vk.vkCmdSetRasterizerDiscardEnable(g_cb, DY.rd));
     DY_SET(bc, d->blend_color, vk.vkCmdSetBlendConstants(g_cb, d->blend_color));
     if (!DY.valid) vk.vkCmdSetLineWidth(g_cb, 1.0f);
-    int restart = di && d->restart.on;
-    if (restart) { uint32_t all = di->itype == 0 ? 0xff : di->itype == 1 ? 0xffff : 0xffffffffu; if (d->restart.index != all) VRED_ONCE("primitive restart index %#x is not the all-ones index Vulkan restarts at", d->restart.index); }
+    int strip_or_fan = topo == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP || topo == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
+                    || topo == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN || topo == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY
+                    || topo == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
+    int restart = di && d->restart.on && strip_or_fan;
+    if (restart) {
+        uint32_t all = di->itype == 0 ? 0xff : di->itype == 1 ? 0xffff : 0xffffffffu;
+        if (d->restart.index != all) VRED_ONCE("primitive restart index %#x is not the all-ones index Vulkan restarts at", d->restart.index);
+    }
     if (!mesh) DY_SET1(pr, (uint32_t)(restart), vk.vkCmdSetPrimitiveRestartEnable(g_cb, DY.pr));
     // PEANUTS: a draw that samples a level its own pass draws into (decals reading the G-buffer they write, soft particles reading the depth they test against while writing
     // it) announces the feedback loop (VK_EXT_attachment_feedback_loop_dynamic_state): the colour aspect whenever a colour attachment is sampled, depth only when the draw writes

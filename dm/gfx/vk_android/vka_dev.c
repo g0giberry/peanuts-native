@@ -17,7 +17,7 @@ _Static_assert(VKA_DRV_QCOM == VK_DRIVER_ID_QUALCOMM_PROPRIETARY && VKA_DRV_TURN
 // One "[auto] KEY=value because driver_id=N (name)" line for each automatic default by driver this device takes (vka_auto.h), once per run at device creation; a switch
 // that is set (env.txt, the launcher, live control before this point) prints nothing: its value is the player's
 static void auto_log(const vka_auto_in *in, const char *name) {
-    vka_auto_rule r[16]; int n = vka_auto_rules(in, r, 16);
+    vka_auto_rule r[24]; int n = vka_auto_rules(in, r, 24);
     for (int i = 0; i < n; i++) {
         char v[64], b[256];
         if (vka_env_str(r[i].key, v, sizeof v)) continue;

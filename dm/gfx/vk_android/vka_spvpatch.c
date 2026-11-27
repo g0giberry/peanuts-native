@@ -156,33 +156,55 @@ int vka_spv_subgroup_rows(const uint32_t *w, size_t nw) {
 }
 uint32_t *vka_spv_subgroup_single(const uint32_t *w, size_t nw, size_t *out_nw, int *changed, char *err, size_t errn) {
 #define FAIL(...) do { snprintf(err, errn, __VA_ARGS__); goto fail; } while (0)
-    uint8_t *bi = NULL, *chain = NULL; int32_t *cval = NULL; vec_t o = {0}; *changed = 0;
+    enum { CapOp = 17, CapGroupNonUniform = 61, CapGroupNonUniformQuad = 68, SGSubgroupMaxSize = 37, SGSubgroupId = 40 };
+    uint8_t *bi = NULL, *bi_keep = NULL, *chain = NULL; int32_t *cval = NULL; vec_t o = {0}; *changed = 0;
     if (nw < 5 || w[0] != 0x07230203) { snprintf(err, errn, "not SPIR-V"); return NULL; }
     uint32_t bound = w[3], nb = bound;
-    bi = calloc(bound, 1); chain = calloc(bound, 1); cval = malloc((size_t)bound * 4);
-    if (!bi || !chain || !cval) FAIL("out of memory");
+    bi = calloc(bound, 1); bi_keep = calloc(bound, 1); chain = calloc(bound, 1); cval = malloc((size_t)bound * 4);
+    if (!bi || !bi_keep || !chain || !cval) FAIL("out of memory");
     for (uint32_t i = 0; i < bound; i++) cval[i] = -1;
-    uint32_t t_u32 = 0, t_v4u = 0, t_bool = 0; size_t first_fn = nw; int any = 0;
+    uint32_t t_u32 = 0, t_v4u = 0, t_bool = 0; size_t first_fn = nw; int any = 0, keep_sg = 0;
     for (size_t i = 5; i < nw;) {
         uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
         if (!len || i + len > nw) FAIL("bad instruction at word %zu", i);
-        if (op == OpDecorate && len >= 4 && w[i + 2] == DecBuiltIn && w[i + 1] < bound && bi_kind(w[i + 3])) bi[w[i + 1]] = (uint8_t)bi_kind(w[i + 3]) | (w[i + 3] >= BIEq ? 4 : 0);   // bit 2: a vec4 mask
+        if (op == OpDecorate && len >= 4 && w[i + 2] == DecBuiltIn && w[i + 1] < bound) {
+            if (bi_kind(w[i + 3])) bi[w[i + 1]] = (uint8_t)bi_kind(w[i + 3]) | (w[i + 3] >= BIEq ? 4 : 0);   // bit 2: a vec4 mask
+            else if (w[i + 3] >= SGSubgroupMaxSize && w[i + 3] <= SGSubgroupId) keep_sg = 1;
+        }
         else if (op == OpTypeInt && len >= 4 && w[i + 2] == 32 && !w[i + 3]) t_u32 = w[i + 1];
         else if (op == OpTypeBool && len >= 2) t_bool = w[i + 1];
         else if (op == OpTypeVector && len >= 4 && w[i + 3] == 4 && w[i + 2] == t_u32 && t_u32) t_v4u = w[i + 1];
         else if (op == OpConstant && len >= 4 && w[i + 2] < bound) cval[w[i + 2]] = (int32_t)w[i + 3];
         else if (op == OpFunction && first_fn == nw) first_fn = i;
         else if (op >= OpGNUElect && op <= OpGNUShuffleDown) any = 1;
+        else if ((op >= 340 && op <= 344) || (op >= 349 && op <= 366)) keep_sg = 1;
+        if (i >= first_fn && op != OpLoad && op != OpAccessChain && op != OpInBoundsAccessChain) {
+            for (uint32_t k = 1; k < len; k++) if (w[i + k] < bound && bi[w[i + k]]) bi_keep[w[i + k]] = 1;
+        }
         i += len;
     }
     for (uint32_t i = 0; i < bound && !any; i++) any = bi[i] != 0;
-    if (!any) { free(bi); free(chain); free(cval); return NULL; }   // nothing to do
+    if (!any) { free(bi); free(bi_keep); free(chain); free(cval); return NULL; }   // nothing to do
     if (!t_u32) FAIL("no 32-bit unsigned type");
     uint32_t mk_v4 = t_v4u ? 0 : nb++, mk_bool = t_bool ? 0 : nb++; if (!t_v4u) t_v4u = mk_v4; if (!t_bool) t_bool = mk_bool;
     uint32_t c0 = nb++, c1 = nb++, cv0 = nb++, cv1 = nb++, ctrue = nb++;   // uint 0, uint 1, uvec4(0), uvec4(1, 0, 0, 0), true
     if (!put_n(&o, w, 5)) FAIL("out of memory");
     for (size_t i = 5; i < nw;) {
         uint32_t op = w[i] & 0xffff, len = w[i] >> 16; const uint32_t *in = w + i;
+        if (!keep_sg && op == CapOp && len >= 2 && w[i + 1] >= CapGroupNonUniform && w[i + 1] <= CapGroupNonUniformQuad) { i += len; continue; }
+        if (i < first_fn) {
+            if ((op == OpName || op == OpDecorate || op == OpDecorateId || op == OpDecorateString) && len >= 2 && w[i + 1] < bound && bi[w[i + 1]] && !bi_keep[w[i + 1]]) { i += len; continue; }
+            if (op == OpVariable && len >= 4 && w[i + 2] < bound && bi[w[i + 2]] && !bi_keep[w[i + 2]]) { i += len; continue; }
+            if (op == OpEntryPoint && len >= 4) {
+                size_t at = o.n; uint32_t k = 3;
+                while (k < len && (w[i + k] & 0xff000000u) && (w[i + k] & 0xff) && (w[i + k] >> 8 & 0xff) && (w[i + k] >> 16 & 0xff)) k++;
+                k++; if (k > len) k = len;
+                if (!put(&o, w[i]) || !put_n(&o, w + i + 1, k - 1)) FAIL("out of memory");
+                for (uint32_t j = k; j < len; j++) if (!(w[i + j] < bound && bi[w[i + j]] && !bi_keep[w[i + j]])) if (!put(&o, w[i + j])) FAIL("out of memory");
+                o.w[at] = (uint32_t)(o.n - at) << 16 | OpEntryPoint;
+                i += len; continue;
+            }
+        }
         if (i == first_fn) {
             if (mk_bool) { uint32_t x[2] = {2u << 16 | OpTypeBool, mk_bool}; if (!put_n(&o, x, 2)) FAIL("out of memory"); }
             if (mk_v4) { uint32_t x[4] = {4u << 16 | OpTypeVector, mk_v4, t_u32, 4}; if (!put_n(&o, x, 4)) FAIL("out of memory"); }
@@ -224,10 +246,10 @@ uint32_t *vka_spv_subgroup_single(const uint32_t *w, size_t nw, size_t *out_nw, 
         i += len;
     }
     o.w[3] = nb;
-    free(bi); free(chain); free(cval);
+    free(bi); free(bi_keep); free(chain); free(cval);
     *out_nw = o.n; return o.w;
 fail:
-    free(bi); free(chain); free(cval); free(o.w);
+    free(bi); free(bi_keep); free(chain); free(cval); free(o.w);
     return NULL;
 #undef FAIL
 }
@@ -887,28 +909,46 @@ uint32_t *vka_spv_gs_link(const uint32_t *gw, size_t gn, const uint32_t *vw, siz
     // gl_in: the Input array of a block whose member 0 is BuiltIn Position; its length; constant ids (indexes taken from its access chains)
     uint32_t glin = 0, nvert = 0, ep_at = 0, first_fn = 0, first_annot = 0;
     if (!(isconst = calloc(G.bound, 1))) FAIL("out of memory");   // first: the blocks with a Position member 0 (gl_PerVertex in and out), then the integer constants
+    uint32_t *gloc = malloc(G.bound * 4); uint8_t *gcomp = calloc(G.bound, 1);
+    if (!gloc || !gcomp) { free(gloc); free(gcomp); FAIL("out of memory"); }
+    for (uint32_t i = 0; i < G.bound; i++) gloc[i] = ~0u;
     for (size_t i = 5; i < gn;) {
         uint32_t op = gw[i] & 0xffff, len = gw[i] >> 16;
         if (op == OpFunction) { first_fn = (uint32_t)i; break; }
         if (op == OpEntryPoint) ep_at = (uint32_t)i;
         if (is_annot(op) && !first_annot) first_annot = (uint32_t)i;
+        if (op == OpDecorate && len >= 4 && gw[i + 1] < G.bound) {
+            if (gw[i + 2] == DecLocation) gloc[gw[i + 1]] = gw[i + 3];
+            else if (gw[i + 2] == DecComponentL) gcomp[gw[i + 1]] = 1;
+        }
         if (op == OpMemberDecorateL && len >= 5 && gw[i + 2] == 0 && gw[i + 3] == DecBuiltIn && gw[i + 4] == BIPositionL && gw[i + 1] < G.bound) isconst[gw[i + 1]] = 2;
         i += len;
     }
-    if (!first_fn || !ep_at || !first_annot) FAIL("no function, entry point or decoration");
+    if (!first_fn || !ep_at || !first_annot) { free(gloc); free(gcomp); FAIL("no function, entry point or decoration"); }
     for (uint32_t v = 0; v < G.bound; v++) {
         if (G.op[v] != OpVariable || G.a2[v] != SCInput) continue;
         uint32_t pt = G.a1[v], at = pt < G.bound ? G.a2[pt] : 0;
         if (at < G.bound && G.op[at] == OpTypeArrayL && G.a1[at] < G.bound && isconst[G.a1[at]] == 2 && G.a2[at] < G.bound && G.op[G.a2[at]] == OpConstant) { glin = v; nvert = G.a2[G.a2[at]]; }
     }
-    if (!glin || !nvert || nvert > 6) FAIL("no gl_in array");
+    if (!glin || !nvert || nvert > 6) { free(gloc); free(gcomp); FAIL("no gl_in array"); }
+    // Existing GS per-vertex Input arrays by Location (reuse instead of declaring a second Input variable at the same location)
+    uint32_t gin[32] = {0}; uint8_t gin_sig[32] = {0};
+    for (uint32_t v = 0; v < G.bound; v++) {
+        if (G.op[v] != OpVariable || G.a2[v] != SCInput || gloc[v] >= 32 || gcomp[v]) continue;
+        uint32_t pt = G.a1[v], at = pt < G.bound && G.op[pt] == OpTypePointer ? G.a2[pt] : 0;
+        if (at < G.bound && G.op[at] == OpTypeArrayL && G.a2[at] < G.bound && G.op[G.a2[at]] == OpConstant && G.a2[G.a2[at]] == nvert) {
+            uint32_t s = smod_sig(&G, G.a1[at]);
+            if (s) { gin[gloc[v]] = v; gin_sig[gloc[v]] = (uint8_t)s; }
+        }
+    }
+    free(gloc); free(gcomp);
     for (uint32_t v = 0; v < G.bound; v++) isconst[v] = G.op[v] == OpConstant && G.a1[v] < G.bound && G.op[G.a1[v]] == OpTypeInt;
     // Types: reused when the module has them (a second declaration of a scalar, vector or pointer type is invalid), else declared before the first function
     uint32_t nb = G.bound;
     #define FIND(cond) ({ uint32_t _r = 0; for (uint32_t _t = 1; _t < G.bound && !_r; _t++) if (cond) _r = _t; _r; })
     uint32_t sc_t[4] = {0}, vec_t_[4][5] = {{0}};
     uint32_t mkp_sc[64], mkp_pt[64], mkp_id[64]; int nmkp = 0;   // pointer types made here
-    uint32_t outv[32] = {0}, inv[32] = {0}, pin[32] = {0}, nul[32] = {0}, ty[32] = {0};
+    uint32_t outv[32] = {0}, inv[32] = {0}, pin[32] = {0}, nul[32] = {0}, ty[32] = {0}; uint8_t inv_new[32] = {0};
     for (int l = 0; l < 32; l++) if (need >> l & 1) {
         uint32_t s = fin[l], k = s >> 4, n = s & 15;
         if (!sc_t[k]) {
@@ -932,13 +972,17 @@ uint32_t *vka_spv_gs_link(const uint32_t *gw, size_t gn, const uint32_t *vw, siz
             else pin[l] = p;
         }
         uint32_t d[4] = {4u << 16 | OpDecorate, outv[l], DecLocation, (uint32_t)l}; if (!put_n(&annot, d, 4)) FAIL("out of memory");
-        if (pin[l]) {   // uint length, the array type, its Input pointer, the variable
-            uint32_t u = FIND(G.op[_t] == OpTypeInt && G.a1[_t] == 32 && G.a2[_t] == 0);
-            if (!u) { if (!sc_t[3]) { sc_t[3] = nb++; uint32_t x[4] = {4u << 16 | OpTypeInt, sc_t[3], 32, 0}; if (!put_n(&decl, x, 4)) FAIL("out of memory"); } u = sc_t[3]; }
-            uint32_t len_c = nb++, arr = nb++, parr = nb++; inv[l] = nb++;
-            uint32_t x[] = {4u << 16 | OpConstant, u, len_c, nvert, 4u << 16 | OpTypeArrayL, arr, t, len_c, 4u << 16 | OpTypePointer, parr, SCInput, arr, 4u << 16 | OpVariable, parr, inv[l], SCInput};
-            if (!put_n(&decl, x, sizeof x / 4)) FAIL("out of memory");
-            uint32_t y[4] = {4u << 16 | OpDecorate, inv[l], DecLocation, (uint32_t)l}; if (!put_n(&annot, y, 4)) FAIL("out of memory");
+        if (pin[l]) {
+            if (gin[l] && gin_sig[l] == s) {
+                inv[l] = gin[l];
+            } else {   // uint length, the array type, its Input pointer, the variable
+                uint32_t u = FIND(G.op[_t] == OpTypeInt && G.a1[_t] == 32 && G.a2[_t] == 0);
+                if (!u) { if (!sc_t[3]) { sc_t[3] = nb++; uint32_t x[4] = {4u << 16 | OpTypeInt, sc_t[3], 32, 0}; if (!put_n(&decl, x, 4)) FAIL("out of memory"); } u = sc_t[3]; }
+                uint32_t len_c = nb++, arr = nb++, parr = nb++; inv[l] = nb++; inv_new[l] = 1;
+                uint32_t x[] = {4u << 16 | OpConstant, u, len_c, nvert, 4u << 16 | OpTypeArrayL, arr, t, len_c, 4u << 16 | OpTypePointer, parr, SCInput, arr, 4u << 16 | OpVariable, parr, inv[l], SCInput};
+                if (!put_n(&decl, x, sizeof x / 4)) FAIL("out of memory");
+                uint32_t y[4] = {4u << 16 | OpDecorate, inv[l], DecLocation, (uint32_t)l}; if (!put_n(&annot, y, 4)) FAIL("out of memory");
+            }
             *copied |= 1u << l;
         } else { nul[l] = nb++; uint32_t x[3] = {3u << 16 | OpConstantNullL, t, nul[l]}; if (!put_n(&decl, x, 3)) FAIL("out of memory"); *nulled |= 1u << l; }
     }
@@ -956,7 +1000,7 @@ uint32_t *vka_spv_gs_link(const uint32_t *gw, size_t gn, const uint32_t *vw, siz
         if (i == first_fn && !put_n(&o, decl.w, decl.n)) FAIL("out of memory");
         if (i == ep_at) {
             size_t at = o.n; if (!put_n(&o, in, len)) FAIL("out of memory");
-            for (int l = 0; l < 32; l++) { if (outv[l] && !put(&o, outv[l])) FAIL("out of memory"); if (inv[l] && !put(&o, inv[l])) FAIL("out of memory"); }
+            for (int l = 0; l < 32; l++) { if (outv[l] && !put(&o, outv[l])) FAIL("out of memory"); if (inv_new[l] && !put(&o, inv[l])) FAIL("out of memory"); }
             o.w[at] = (uint32_t)(o.n - at) << 16 | OpEntryPoint; i += len; continue;
         }
         if (op == OpFunction) vtx = zero;

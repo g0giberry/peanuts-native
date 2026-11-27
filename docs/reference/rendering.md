@@ -1871,3 +1871,28 @@ On the Retroid Pocket Flip 2, PurpleVK T30 (`git-62ac221a33`) reports a 33.11 ns
 - **Cause:** `nvnCommandBufferDownsample` is recorded as a texture copy whose rectangles are the two whole textures (`rec_downsample`, `hle_nvn.c`), and the Vulkan replay resolved with the source's extent (`copy_t2t`, `vka_exec.c`). A game that resolves its 4x 1920x1080 scene target into a 1280x720 texture got a `vkCmdResolveImage` region that ran 640x360 past the destination, which Vulkan does not allow; Adreno wrote the overflow into the destination's own tiles.
 - **Fix:** the resolve takes the part both textures have: the smaller of the two rectangles, kept inside both images' levels (the top-left 1280x720 the game drew). The log says it once: `multisample resolve of 1920x1080 (serial …, 4 samples) into 1280x720 (serial …): the 1280x720 both have`.
 - **Found on:** [Digimon Story Time Stranger](../../dm/games/010062E01FE0C000/README.md#found-on-this-game) in handheld mode (issue #552), Turnip on the AYN Thor and on a Snapdragon 7 series phone.
+
+
+### Packed 32-bit float formats bound as integer storage images
+
+<!-- PEANUTS: an entry of this fork. -->
+- **Symptom:** `[RED] vk: shader ... binding 7: texture ID ... has no view of shape 0x81 (storage): it reads as unbound (format 0x3f ...)` and dark 3D rendering on both Turnip and Qualcomm's driver.
+- **Cause:** `computedeferredcomposite_cs` declares an `OpTypeImage ... R32ui` storage image binding over a `VK_FORMAT_B10G11R11_UFLOAT_PACK32` HDR target. `vka_tex.c` (`vl_pair_ok`, `img_storage_upgrade`, `vkfl_view_usage`) already included `B10G11R11_UFLOAT_PACK32` / `E5B9G9R9_UFLOAT_PACK32` in the 32-bit mutable format list, but `class_twin()` returned `VK_FORMAT_UNDEFINED`, so `id_view()` returned `VK_NULL_HANDLE` for storage views asking for `R32_UINT` / `R32_SINT`.
+- **Fix:** map `VK_FORMAT_B10G11R11_UFLOAT_PACK32` and `VK_FORMAT_E5B9G9R9_UFLOAT_PACK32` to `VK_FORMAT_R32_UINT` (and `VK_FORMAT_R32_SINT` for signed integer requests) in `class_twin()` (`dm/gfx/vk_android/vka_tex.c`). Checked in `dm/host/tests/t_android_fmtlist.c`.
+- **Found on:** [DOOM](../../dm/games/0100416004C00000/README.md#found-on-this-game).
+
+### Primitive restart enabled on non-strip and non-fan topologies
+
+<!-- PEANUTS: an entry of this fork. -->
+- **Symptom:** `[RED] vk: primitive restart index 0xffff is not the all-ones index Vulkan restarts at` when drawing with a non-all-ones NVN restart index (such as `0xffff` over 32-bit indices or state left set across draws).
+- **Cause:** NVN's primitive restart enable/index state remained active during `VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST` and other non-strip/non-fan draws where primitive restart has no effect or triggers Vulkan validation/mismatch diagnostics.
+- **Fix:** gate `vkCmdSetPrimitiveRestartEnable` in `dm/gfx/vk_android/vka_draw.c` so primitive restart is enabled only for strip and fan topologies (`LINE_STRIP`, `TRIANGLE_STRIP`, `TRIANGLE_FAN`, and their `_WITH_ADJACENCY` variants).
+- **Found on:** [DOOM](../../dm/games/0100416004C00000/README.md#found-on-this-game).
+
+### Stale LRZ bins across depth-buffer switches on Qualcomm's driver (Android)
+
+<!-- PEANUTS: an entry of this fork. -->
+- **Symptom:** (Android, Qualcomm's system driver `driverID` 8) 3D geometry and weapons dissolve into 8x8 / 8x4 blocky artifacts as the camera moves, matching ~18.7% depth coverage with transitions aligned to 8-pixel tile boundaries.
+- **Cause:** Qualcomm's Adreno LRZ state persisted across depth-attachment switches (`serial 6` `D24_UNORM_S8_UINT` and other depth buffers), rejecting entire 8x8 LRZ bins in subsequent passes. Switching away from a previous depth buffer (`prev != cur`) with a 1-texel `vkCmdCopyImageToBuffer` + `vkCmdCopyBufferToImage` write-back (`lrz_copy`) forces the driver to drop stale LRZ state; same-depth `LOAD_OP_LOAD` passes did not need per-pass copies.
+- **Fix:** make `DM_VK_LRZ_TOUCH=1` switch-only (`prev` write-back on switch + `cur` read on loaded switch; `=2` preserves every-load reads), replace full `vka_barrier()` calls inside `lrz_copy` with stage-scoped `vka_barrier_stages()`, and enable `DM_VK_LRZ_TOUCH=1` automatically on `VK_DRIVER_ID_QUALCOMM_PROPRIETARY` (`vka_draw.c`, `vka_auto.h`). Measured on Odin 3 (`V@0800.72`): restores 100% depth coverage and clean rendering at `13.46 ms` GPU vs `14.18 ms` off and `+10` barriers/frame vs `+302` barriers/frame in mode `2`.
+- **Found on:** [DOOM](../../dm/games/0100416004C00000/README.md#found-on-this-game).

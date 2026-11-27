@@ -936,7 +936,7 @@ void svc_thread_dump(void) {
         // pushed (x30 = the return address into the wrapper's caller, which the backtrace skips: the wrappers are leaf functions), the guest stack at the SVC follows at +16.
         // Read page by page up to the first unreadable one: a thread waiting near its stack top (a shallow worker) has PROT_NONE stack region above it, and one read would fail whole
         uint64_t *sr = atomic_load(&t->svc_regs);
-        if (sr && t->wkind) { uint64_t stk[160]; size_t got = 0; uint64_t sa = sr[99], pg = plat_page_size();
+        if (sr) { uint64_t stk[160]; size_t got = 0; uint64_t sa = sr[99], pg = plat_page_size();
             while (got < sizeof stk) { size_t n = sizeof stk - got, room = pg - ((sa + got) & (pg - 1)); if (n > room) n = room;
                 if (plat_mem_read(sa + got, (uint8_t *)stk + got, n)) break;
                 got += n; }
