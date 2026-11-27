@@ -72,7 +72,7 @@ def check_row(g, words, o=None):
             if len(sets) > 1: raise Error(f'{where}: a driver row sets only the driver: {" ".join(sets)}')
         elif k == 'upscaler': take(DLSS_MODES if o['dlss'] else UPSCALERS)
         elif k == 'hold60': take(ON_OFF, o['steps'])
-        elif k == 'fps_cap': take(PACE if o['limited'] else CAPS)
+        elif k == 'fps_cap': take(['own'] + PACE if o['limited'] else CAPS)
         elif k == 'drs': take(DRS, o['drs'])
         elif k == 'vegetation': take(ON_OFF, o['vegetation'])
         elif k == 'skip_layers': take(ON_OFF, o['skip_layers'])

@@ -88,7 +88,8 @@
     "01001BB01E8E2000",
     "01004BC0166CC000",
     "0100ACD0163D0000",
-    "010057D006492000"
+    "010057D006492000",
+    "0100416004C00000"
   ],
   "games": [
     {
@@ -408,6 +409,25 @@
       ],
       "profile": "dm/games/010062E01FE0C000/game.tsv",
       "note": "dm/games/010062E01FE0C000/README.md"
+    },
+    {
+      "title_id": "0100416004C00000",
+      "name": "DOOM",
+      "profile_name": "DOOM",
+      "builds": [
+        {
+          "version": "v327680",
+          "number": 327680,
+          "display": "1.4.1"
+        }
+      ],
+      "readme_update": "1.4.1",
+      "package": "v327680",
+      "companion": false,
+      "since": "0.1.10",
+      "contributors": [],
+      "profile": "dm/games/0100416004C00000/game.tsv",
+      "note": "dm/games/0100416004C00000/README.md"
     },
     {
       "title_id": "01006AE02236C000",

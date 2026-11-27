@@ -35,3 +35,19 @@ place_join_mb	1024
 # ---- Shader split ----
 shader_groups	/base/=base /virtualtextures/=virtualtextures
 shader_note	DOOM shaders (id Tech 6 GLSLC .sb in gameresources_003.patch)
+
+# ---- Frame rate ----
+# PEANUTS: reviewed FPSLocker Warehouse rows (0100416004C00000/C638A0730217792B.yaml, 1.4.1; every BSS offset independently verified from
+# main's .rela.dyn). flag_cap_u8 at @0x7377d64 (engine tick +0x24) locks fixed-speed cutscenes, scripted deaths and Bink intros to 30 fps
+# while normal gameplay runs up to 60 fps via com_adaptiveTick (MinHz 15, MaxHz = live cap) and 60 fps dynamic resolution budgets.
+fps_limit_present	1
+fps_limit_max	60
+# Measured in dm/games/0100416004C00000/README.md (Frame rate): keep Game owned (30 fps) as the default while unlocking 20-60 fps.
+recommend	any	fps_cap=own
+fpslocker	c638a0730217792b1ceaecf0d635f410	flag_cap_u8	@0x7377d64	1	0:30
+fpslocker	c638a0730217792b1ceaecf0d635f410	target_i32	@0x66b3f50	1	0
+fpslocker	c638a0730217792b1ceaecf0d635f410	target_f32	@0x66b3f54	1	0
+fpslocker	c638a0730217792b1ceaecf0d635f410	constant_i32	@0x66b3eb8	1	15:1
+fpslocker	c638a0730217792b1ceaecf0d635f410	constant_i32	@0x66b1560	1	1:1
+fpslocker	c638a0730217792b1ceaecf0d635f410	frame_scaled_f32	@0x593e9ec	1	0.966:1
+fpslocker	c638a0730217792b1ceaecf0d635f410	frame_scaled_f32	@0x593e954	1	0.99:1

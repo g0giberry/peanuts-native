@@ -32,7 +32,7 @@ too.
 
 <!-- PEANUTS begin: the Supported games table, written by peanuts/scripts/games_catalog.py from peanuts/games.tsv, peanuts/release-titles.txt and the profiles. Edit peanuts/games.tsv, not this table -->
 
-Peanuts Native 0.1.9 includes 87 games. The Companion column shows whether a game appears in the Eden Duo Companions catalog, and the Contributor column the community members who brought a game to Peanuts Native. Updates are shown as version numbers or numeric update IDs.
+Peanuts Native 0.1.9 includes 87 games, and 1 more is coming in 0.1.10 (marked in the table). The Companion column shows whether a game appears in the Eden Duo Companions catalog, and the Contributor column the community members who brought a game to Peanuts Native. Updates are shown as version numbers or numeric update IDs.
 
 | Game | Title ID | Game update | Companion | Contributor |
 |---|---|---|---|---|
@@ -123,6 +123,7 @@ Peanuts Native 0.1.9 includes 87 games. The Companion column shows whether a gam
 | CRISIS CORE –FINAL FANTASY VII– REUNION | `01004BC0166CC000` | 1.0.0 | No | ⭐<br><a href="https://github.com/tapionallanaire"><img src="https://img.shields.io/badge/tapionallanaire-181717?style=flat-square&logo=github&logoColor=white" style="vertical-align: middle;" alt="tapionallanaire"></a> |
 | Batman: Arkham Knight | `0100ACD0163D0000` | 1.0.5 | No | ⭐<br><a href="https://github.com/tapionallanaire"><img src="https://img.shields.io/badge/tapionallanaire-181717?style=flat-square&logo=github&logoColor=white" style="vertical-align: middle;" alt="tapionallanaire"></a> |
 | OCTOPATH TRAVELER | `010057D006492000` | 1.0.5 | No | ⭐<br><a href="https://github.com/Alliance-Sky"><img src="https://img.shields.io/badge/Alliance--Sky-181717?style=flat-square&logo=github&logoColor=white" style="vertical-align: middle;" alt="Alliance-Sky"></a> |
+| DOOM (coming in 0.1.10) | `0100416004C00000` | 1.4.1 | No |  |
 
 <!-- PEANUTS end: the Supported games table -->
 
