@@ -23,6 +23,13 @@ static void t_keys(void) {
     uint64_t all = 0; for (int k = 0; k < 300; k++) { uint64_t b = nxin_key_button(k, 0); CHECK(!(all & b), "bit %#llx twice", (unsigned long long)b); all |= b; }
     CHECK(all == 0xffff, "all sixteen buttons: %#llx", (unsigned long long)all);
 }
+// anti-deadzone: inside dz stays 0, just past dz jumps to anti_dz, full tilt stays DM_STICK_MAX
+static void t_anti_dz(void) {
+        int32_t ax, ay;
+        nxin_stick_ex(0.01f, 0, 0.02f, 0.30f, &ax, &ay); CHECK(ax == 0 && ay == 0, "anti-dz inside dz: %d %d", ax, ay);
+        nxin_stick_ex(0.03f, 0, 0.02f, 0.30f, &ax, &ay); CHECK(ax > DM_STICK_MAX * 0.29 && ax < DM_STICK_MAX * 0.33 && ay == 0, "anti-dz just past dz: %d %d", ax, ay);
+        nxin_stick_ex(1.0f, 0, 0.02f, 0.30f, &ax, &ay); CHECK(ax == DM_STICK_MAX && ay == 0, "anti-dz full tilt: %d %d", ax, ay);
+}
 static void t_pad(void) {
     nxin_pad p = {0}; uint64_t b; int32_t lx, ly, rx, ry;
     nxin_pad_key(&p, AK_BUTTON_B, 1, 0); nxin_pad_key(&p, AK_BUTTON_R1, 1, 0);
@@ -189,7 +196,7 @@ static void t_fit(void) {
 }
 int main(void) {
     t_map(); t_fit();
-    t_keys(); t_pad(); t_touch(); t_layout(); t_motion(); t_shake();
+    t_keys(); t_pad(); t_anti_dz(); t_touch(); t_layout(); t_motion(); t_shake();
     if (fails) { printf("t_android_input: %d failures\n", fails); return 1; }
     printf("t_android_input: ok\n");
     return 0;

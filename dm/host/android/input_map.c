@@ -88,15 +88,18 @@ int nxin_pad_axes(nxin_pad *p, const int *axes, const float *v, int n) {
     for (int i = 0; i < n; i++) if (!(z && (axes[i] == AA_RX || axes[i] == AA_RY))) used |= nxin_pad_axis(p, axes[i], v[i]);
     return used;
 }
-void nxin_stick(float x, float y, float dz, int32_t *ox, int32_t *oy) {
+void nxin_stick_ex(float x, float y, float dz, float adz, int32_t *ox, int32_t *oy) {
     if (!(dz >= 0)) dz = 0; if (dz > 0.9f) dz = 0.9f;
+    if (!(adz >= 0)) adz = 0; if (adz > 0.9f) adz = 0.9f;
     x = clamp1(x); y = clamp1(y);
     float m = sqrtf(x * x + y * y);
     if (m <= dz || m == 0) { *ox = *oy = 0; return; }
-    float s = (m - dz) / (1 - dz) / m; if (m * s > 1) s = 1 / m;   // rescaled radius, at most full tilt
+    float t = (m - dz) / (1 - dz); if (t > 1) t = 1;
+    float s = (adz + (1 - adz) * t) / m; if (m * s > 1) s = 1 / m;   // rescaled radius, at most full tilt
     *ox = (int32_t)lrintf(x * s * DM_STICK_MAX); *oy = (int32_t)lrintf(-y * s * DM_STICK_MAX);
 }
-void nxin_pad_out(nxin_pad *p, float dz, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
+void nxin_stick(float x, float y, float dz, int32_t *ox, int32_t *oy) { nxin_stick_ex(x, y, dz, 0, ox, oy); }
+void nxin_pad_out_ex(nxin_pad *p, float dz, float anti_l, float anti_r, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     p->lt_on = p->lt_on ? p->lt > 0.4f : p->lt > 0.5f;   // the trigger hysteresis is state
     p->rt_on = p->rt_on ? p->rt > 0.4f : p->rt > 0.5f;
     const nxin_map *m = p->map;   // the analog triggers are BUTTON_L2 / R2 and the hat DPAD_* for the map
@@ -104,7 +107,10 @@ void nxin_pad_out(nxin_pad *p, float dz, uint64_t *buttons, int32_t *lx, int32_t
     if (p->hat_x < -0.5f) b |= mapped(m, SRC_LEFT, DM_BTN_LEFT); if (p->hat_x > 0.5f) b |= mapped(m, SRC_RIGHT, DM_BTN_RIGHT);
     if (p->hat_y < -0.5f) b |= mapped(m, SRC_UP, DM_BTN_UP); if (p->hat_y > 0.5f) b |= mapped(m, SRC_DOWN, DM_BTN_DOWN);
     *buttons = b;
-    nxin_stick(p->lx, p->ly, dz, lx, ly); nxin_stick(p->rx, p->ry, dz, rx, ry);
+    nxin_stick_ex(p->lx, p->ly, dz, anti_l, lx, ly); nxin_stick_ex(p->rx, p->ry, dz, anti_r, rx, ry);
+}
+void nxin_pad_out(nxin_pad *p, float dz, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
+    nxin_pad_out_ex(p, dz, 0, 0, buttons, lx, ly, rx, ry);
 }
 
 // ---------- On-screen controls ----------

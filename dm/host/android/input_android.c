@@ -23,7 +23,7 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;   // pads, slots, touch
 static pad_slots g_slots;
 static int g_labelled[DM_PLAYERS];
 static nxin_pad g_pad[DM_PLAYERS];
-static float g_dz = -1;
+static float g_dz = -1, g_adz_l = -1, g_adz_r = -1;
 static nxin_touch g_touch; static int g_touch_init;
 static uint64_t g_shake_btn;
 static pad_motion_cal g_pm_cal[DM_PLAYERS];   // each controller's rest offset of the gyro (pad_motion.h), under g_mu
@@ -51,9 +51,26 @@ static float deadzone(void) {
     if (g_dz < 0) { const char *e = getenv("DM_PAD_DEADZONE"); g_dz = e ? (float)atof(e) : 0.1f; }
     return g_dz;
 }
+static void anti_deadzone(float *l, float *r) {
+    if (g_adz_l < 0) {
+        const char *e = getenv("DM_PAD_ANTI_DEADZONE");
+        float a = 0, b = 0;
+        if (e && *e) {
+            int n = sscanf(e, "%f,%f", &a, &b);
+            if (n == 1) b = a;
+            else if (n < 1) a = b = 0;
+            if (!(a >= 0)) a = 0; if (a > 0.9f) a = 0.9f;
+            if (!(b >= 0)) b = 0; if (b > 0.9f) b = 0.9f;
+            if (a > 0 || b > 0) LOG("input: DM_PAD_ANTI_DEADZONE=%.3f,%.3f", a, b);
+        }
+        g_adz_l = a; g_adz_r = b;
+    }
+    *l = g_adz_l; *r = g_adz_r;
+}
 static void publish_pad(int p) {   // under g_mu
-    uint64_t b; int32_t lx, ly, rx, ry;
-    nxin_pad_out(&g_pad[p], deadzone(), &b, &lx, &ly, &rx, &ry);
+    uint64_t b; int32_t lx, ly, rx, ry; float al, ar;
+    anti_deadzone(&al, &ar);
+    nxin_pad_out_ex(&g_pad[p], deadzone(), al, ar, &b, &lx, &ly, &rx, &ry);
     dm_pad_set_player(p, b, lx, ly, rx, ry);
 }
 static void publish_touch_pad(void) {   // under g_mu

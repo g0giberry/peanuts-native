@@ -46,9 +46,11 @@ int nxin_pad_axis(nxin_pad *p, int axis, float v);                     // 1 when
 // One MotionEvent's axes (only those the device has: InputDevice.getMotionRange). A device that has Z / RZ has its right stick there (Android's key layouts put it there,
 // with the triggers on LTRIGGER / RTRIGGER), and its RX / RY are left out, so a pad that also reports RX / RY as idle or as triggers does not pull the stick back. Returns 1 when any is used
 int nxin_pad_axes(nxin_pad *p, const int *axes, const float *values, int n);
-// Buttons and sticks for dm_pad_set_player: stick y up, ±DM_STICK_MAX, a radial dead zone (0..0.9) rescaled to the full range
+// Buttons and sticks for dm_pad_set_player: stick y up, ±DM_STICK_MAX, a radial dead zone (0..0.9) rescaled to the full range, and optional anti-deadzone (0..0.9)
 void nxin_pad_out(nxin_pad *p, float deadzone, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);
+void nxin_pad_out_ex(nxin_pad *p, float deadzone, float anti_l, float anti_r, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);
 void nxin_stick(float x, float y, float deadzone, int32_t *ox, int32_t *oy);   // one stick, Android axes in (y down), Switch axes out (y up)
+void nxin_stick_ex(float x, float y, float deadzone, float anti_deadzone, int32_t *ox, int32_t *oy);
 
 // ---------- On-screen controls ----------
 // A data model the launcher draws: each control has a centre in normalized screen coordinates (0..1, origin top left) and a radius in units of the screen height,
